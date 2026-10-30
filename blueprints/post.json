@@ -1,0 +1,9 @@
+{
+  "name": "post",
+  "palette": { "C": "cobblestone" },
+  "layers": [
+    ["CCC", "C.C", "CCC"],
+    ["C.C", "C.C", "C.C"],
+    ["CCC", "C.C", "CCC"]
+  ]
+}

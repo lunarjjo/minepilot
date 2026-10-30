@@ -8,3 +8,6 @@ server-normal/
 paper-*.jar
 eula.txt
 mcserver/
+waypoints.json
+schematics/*.litematic
+schematics/*.schem

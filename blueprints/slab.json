@@ -1,0 +1,7 @@
+{
+  "name": "slab",
+  "palette": { "D": "dirt" },
+  "layers": [
+    ["DDD", "DDD", "DDD"]
+  ]
+}

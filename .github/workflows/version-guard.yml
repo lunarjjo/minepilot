@@ -1,0 +1,83 @@
+name: version-guard
+
+# the "always current" machinery: every morning, compare the newest
+# Minecraft release against what minepilot can actually run (official
+# minecraft-data support, vendored overlay, e2e-verified matrix). when a
+# release has no path yet — or skipped verification — open a tracking
+# issue so a human or agent can land the overlay, exactly like 26.2/26.3.
+
+on:
+  schedule:
+    - cron: '17 4 * * *' # 04:17 UTC daily, off the busy hour
+  workflow_dispatch: {}
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: run version-check
+        id: vc
+        run: |
+          set +e
+          node scripts/version-check.mjs --json > version-report.json
+          RC=$?
+          echo "rc=$RC" >> "$GITHUB_OUTPUT"
+          if [ $RC -eq 2 ]; then
+            echo "version-check could not run (network?)" >&2
+            exit 0 # never fail the workflow on tooling hiccups
+          fi
+          exit 0
+      - name: open or refresh the tracking issue
+        if: steps.vc.outputs.rc == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node - <<'EOF' > issue-body.md
+          const r = require('./version-report.json')
+          const lines = [
+            '## Minecraft version currency report',
+            '',
+            `Newest release: **${r.latestMinecraft}** (checked ${r.when})`,
+            '',
+            '| version | support | e2e |',
+            '| --- | --- | --- |',
+            ...r.support.map(s => `| ${s.version} | ${s.official ? 'official minecraft-data' : (s.overlay ? 'vendored overlay' : '**none**')} | ${s.e2eVerified ? 'yes' : 'no'} |`),
+            '',
+            '### actions needed',
+            ...r.actions.map(a => `- [ ] ${a}`),
+            '',
+            '### how to add support for a new version',
+            '1. find (or prepare) the minecraft-data PR with the version data and vendor it into `src/version-compat/data/pc/<version>/`',
+            '2. register the file list in `src/version-compat/index.js` (OWN_FILES), add any behavioral fixes to BEHAVIORS',
+            '3. add the version to the `mc` matrix in `ci.yml` so live e2e verifies it',
+            '4. update the support table in README.md',
+            '',
+            'This issue is opened and refreshed automatically by the `version-guard` workflow.'
+          ]
+          process.stdout.write(lines.join('\n'))
+          EOF
+          TITLE="minecraft version currency: newest release needs attention"
+          # reuse the open tracking issue if one exists
+          EXISTING=$(gh issue list --state open --limit 50 --json number,title --jq ".[] | select(.title == \"$TITLE\") | .number" | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file issue-body.md
+          else
+            gh issue create --title "$TITLE" --body-file issue-body.md --label enhancement
+          fi
+      - name: upload report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: version-report
+          path: version-report.json
+          if-no-files-found: ignore
