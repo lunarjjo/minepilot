@@ -1,0 +1,34 @@
+{
+  "name": "minepilot",
+  "version": "0.1.0",
+  "description": "Fly ONE mineflayer bot with full baritone-style control: interactive 2D map (click to goto, drag to select), goals, mine/excavate/build/farm/explore, inventory, crafting and elytra — one web cockpit, zero build step. Tracks the newest Minecraft versions (26.x) via a self-disabling protocol overlay.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test",
+    "test:live": "node test/live.js"
+  },
+  "keywords": [
+    "minecraft",
+    "mineflayer",
+    "bot",
+    "baritone",
+    "pathfinding",
+    "autopilot",
+    "control-panel",
+    "radar",
+    "websocket",
+    "nodejs",
+    "game-automation"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "mineflayer": "^4.39.0",
+    "minecraft-data": "^3.0.0",
+    "vec3": "^0.1.10",
+    "ws": "^8.22.0"
+  }
+}
