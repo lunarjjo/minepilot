@@ -80,20 +80,34 @@ async function executeCommand (raw, ctx) {
     ctx.reply(parsed.error)
     return { ok: false, error: parsed.error }
   }
+  // commands either reply() themselves or return { ok, reply }; unify
+  // the two so every input path (chat, console, map, rest) hears the same
+  // answer. run the dispatch through an inner reply-capturing context.
   const { name, args } = parsed
   const { pilot, bot, settings, selection, waypoints } = ctx
   const node = () => pilot.node() || { x: 0, y: 64, z: 0 }
+  let replies = 0
+  const inner = { ...ctx, reply: (text) => { replies++; ctx.reply(text) } }
+
+  const r = await dispatchCommand(name, args, inner, { pilot, bot, settings, selection, waypoints, node, ctx })
+  if (r && r.reply && replies === 0) ctx.reply(r.reply)
+  return r
+}
+
+async function dispatchCommand (name, args, ctx, refs) {
+  const { pilot, bot, settings, selection, waypoints, node } = refs
+  const { reply } = ctx
 
   switch (name) {
     // ------------------------------------------------------------ help
     case 'help': {
       if (args.command) {
         const c = COMMANDS.find((x) => x.name === args.command)
-        ctx.reply(c ? `${c.name} ${c.args} — ${c.help}` : `unknown command "${args.command}"`)
+        reply(c ? `${c.name} ${c.args} — ${c.help}` : `unknown command "${args.command}"`)
         return { ok: true }
       }
-      ctx.reply('commands (baritone parity + minepilot extras):')
-      for (const line of helpLines()) ctx.reply('  ' + line)
+      reply('commands (baritone parity + minepilot extras):')
+      for (const line of helpLines()) reply('  ' + line)
       return { ok: true }
     }
 
@@ -101,42 +115,42 @@ async function executeCommand (raw, ctx) {
     case 'set': {
       if (args.mode === 'list') {
         for (const cat of settings.categories()) {
-          ctx.reply(`${cat.name} — ${cat.blurb} (${cat.count})`)
+          reply(`${cat.name} — ${cat.blurb} (${cat.count})`)
         }
-        ctx.reply('use "set <key>" for one setting, "set <key> <value>" to change it')
+        reply('use "set <key>" for one setting, "set <key> <value>" to change it')
         return { ok: true }
       }
       if (args.mode === 'modified') {
         const mods = settings.modifiedList()
         if (mods.length === 0) {
-          ctx.reply('no settings modified from defaults')
+          reply('no settings modified from defaults')
           return { ok: true }
         }
-        for (const m of mods) ctx.reply(`${m.key} = ${JSON.stringify(m.value)} (default ${JSON.stringify(m.default)})`)
+        for (const m of mods) reply(`${m.key} = ${JSON.stringify(m.value)} (default ${JSON.stringify(m.default)})`)
         return { ok: true }
       }
       if (args.mode === 'reset') {
         const r = settings.reset(args.key)
-        if (!r.ok) { ctx.reply(r.error); return r }
+        if (!r.ok) { reply(r.error); return r }
         pilot.syncFromSettings()
-        ctx.reply(args.key ? `reset ${args.key}` : 'all settings reset')
+        reply(args.key ? `reset ${args.key}` : 'all settings reset')
         return { ok: true }
       }
       if (args.mode === 'show') {
         if (!settings.has(args.key)) {
           const r = settings.set(args.key, 'true') // triggers the suggest error
-          ctx.reply(r.error)
+          reply(r.error)
           return r
         }
         const s = settings.list().find((x) => x.key === args.key)
-        ctx.reply(`${s.key} = ${JSON.stringify(s.value)} — ${s.description}`)
+        reply(`${s.key} = ${JSON.stringify(s.value)} — ${s.description}`)
         return { ok: true }
       }
       // mode === 'set'
       const r = settings.set(args.key, args.value)
-      if (!r.ok) { ctx.reply(`${args.key}: ${r.error}`); return r }
+      if (!r.ok) { reply(`${args.key}: ${r.error}`); return r }
       pilot.syncFromSettings()
-      ctx.reply(`${args.key} = ${JSON.stringify(r.value)}`)
+      reply(`${args.key} = ${JSON.stringify(r.value)}`)
       return { ok: true }
     }
 
@@ -146,7 +160,7 @@ async function executeCommand (raw, ctx) {
         pilot.goal = null
         pilot.goalLabel = ''
         pilot.emit('task')
-        ctx.reply('goal cleared')
+        reply('goal cleared')
         return { ok: true }
       }
       if (args.mode === 'feet') {
@@ -188,16 +202,16 @@ async function executeCommand (raw, ctx) {
     // -------------------------------------------------------- reporting
     case 'proc': {
       const info = pilot.info()
-      ctx.reply(`task: ${info.task}${info.process ? ` (process ${info.process})` : ''}`)
-      ctx.reply(`goal: ${info.goal || 'none'}${info.partial ? ' (partial)' : ''}${info.paused ? ' [PAUSED]' : ''}`)
-      ctx.reply(`progress: ${info.progress}/${info.total} moves, replans ${info.replans}, stuck ${info.stuck}`)
+      reply(`task: ${info.task}${info.process ? ` (process ${info.process})` : ''}`)
+      reply(`goal: ${info.goal || 'none'}${info.partial ? ' (partial)' : ''}${info.paused ? ' [PAUSED]' : ''}`)
+      reply(`progress: ${info.progress}/${info.total} moves, replans ${info.replans}, stuck ${info.stuck}`)
       return { ok: true }
     }
 
     case 'eta': {
       const e = pilot.eta()
-      if (!e.ok) { ctx.reply(e.error); return e }
-      ctx.reply(e.arrived
+      if (!e.ok) { reply(e.error); return e }
+      reply(e.arrived
         ? 'goal is met'
         : `${e.blocks} blocks to go, roughly ${Math.floor(e.seconds / 60)}m${e.seconds % 60}s (task ${e.task})`)
       return { ok: true, eta: e }
@@ -205,28 +219,28 @@ async function executeCommand (raw, ctx) {
 
     case 'version': {
       const mf = require('mineflayer/package.json').version
-      ctx.reply(`minepilot ${VERSION} | mineflayer ${mf} | minecraft ${bot.version}`)
+      reply(`minepilot ${VERSION} | mineflayer ${mf} | minecraft ${bot.version}`)
       return { ok: true }
     }
 
     case 'gc': {
       if (global.gc) global.gc()
       const mu = process.memoryUsage()
-      ctx.reply(`heap ${(mu.heapUsed / 1048576).toFixed(1)}/${(mu.heapTotal / 1048576).toFixed(1)} MiB, rss ${(mu.rss / 1048576).toFixed(1)} MiB${global.gc ? ' (gc run)' : ' (start node with --expose-gc to force gc)'}`)
+      reply(`heap ${(mu.heapUsed / 1048576).toFixed(1)}/${(mu.heapTotal / 1048576).toFixed(1)} MiB, rss ${(mu.rss / 1048576).toFixed(1)} MiB${global.gc ? ' (gc run)' : ' (start node with --expose-gc to force gc)'}`)
       return { ok: true }
     }
 
     case 'where': {
       const n = node()
-      ctx.reply(`i am at ${n.x} ${n.y} ${n.z} (task: ${pilot.task})`)
+      reply(`i am at ${n.x} ${n.y} ${n.z} (task: ${pilot.task})`)
       return { ok: true, node: n }
     }
 
     case 'status': {
       const n = node()
       const e = pilot.eta()
-      ctx.reply(`pos ${n.x} ${n.y} ${n.z} | health ${bot.health ?? '?'} food ${bot.food ?? '?'} | task ${pilot.task}${pilot.paused ? ' [PAUSED]' : ''}`)
-      ctx.reply(`goal ${pilot.goalLabel || 'none'}${e.ok && !e.arrived ? ` | ${e.blocks} blocks to go` : ''} | selection ${selection.hasSelection() ? selection.volume() + ' cells' : 'none'} | waypoints ${waypoints.list().length}`)
+      reply(`pos ${n.x} ${n.y} ${n.z} | health ${bot.health ?? '?'} food ${bot.food ?? '?'} | task ${pilot.task}${pilot.paused ? ' [PAUSED]' : ''}`)
+      reply(`goal ${pilot.goalLabel || 'none'}${e.ok && !e.arrived ? ` | ${e.blocks} blocks to go` : ''} | selection ${selection.hasSelection() ? selection.volume() + ' cells' : 'none'} | waypoints ${waypoints.list().length}`)
       return { ok: true }
     }
 
@@ -238,19 +252,19 @@ async function executeCommand (raw, ctx) {
       return pilot.resume()
     }
     case 'paused': {
-      ctx.reply(pilot.paused ? `paused by ${pilot.pausedBy}` : 'not paused')
+      reply(pilot.paused ? `paused by ${pilot.pausedBy}` : 'not paused')
       return { ok: true, paused: pilot.paused }
     }
     case 'cancel':
     case 'stop': {
       pilot.stop()
-      ctx.reply('stopped')
+      reply('stopped')
       return { ok: true }
     }
     case 'forcecancel': {
       pilot.stop()
       try { bot.clearControlStates() } catch (e) { /* ignore */ }
-      ctx.reply('force cancelled: goal, processes and controls')
+      reply('force cancelled: goal, processes and controls')
       return { ok: true }
     }
 
@@ -261,17 +275,17 @@ async function executeCommand (raw, ctx) {
       if (args.player) {
         pos = playerPosition(bot, args.player)
         who = args.player
-        if (!pos) { ctx.reply(`i cannot see ${args.player}`); return { ok: false, error: 'player not visible' } }
+        if (!pos) { reply(`i cannot see ${args.player}`); return { ok: false, error: 'player not visible' } }
       } else if (ctx.commander && ctx.commander.entity && ctx.commander.entity.position) {
         pos = ctx.commander.entity.position
         who = ctx.commander.name
       } else {
-        ctx.reply('come needs a player caller — use goto <x> <z> instead')
+        reply('come needs a player caller — use goto <x> <z> instead')
         return { ok: false, error: 'no commander' }
       }
       const r = pilot.come(pos)
-      if (r.ok) ctx.reply(`heading to ${who}`)
-      else ctx.reply(r.error)
+      if (r.ok) reply(`heading to ${who}`)
+      else reply(r.error)
       return r
     }
 
@@ -293,7 +307,7 @@ async function executeCommand (raw, ctx) {
 
     case 'spawn': {
       const sp = bot.spawnPoint || (bot.world && bot.world.spawnPoint)
-      if (!sp) { ctx.reply('spawn point unknown'); return { ok: false, error: 'no spawn point' } }
+      if (!sp) { reply('spawn point unknown'); return { ok: false, error: 'no spawn point' } }
       return pilot.goto(Math.floor(sp.x), Math.floor(sp.y), Math.floor(sp.z))
     }
 
@@ -308,9 +322,9 @@ async function executeCommand (raw, ctx) {
         const d = e.position.distanceTo(p)
         if (d < bestD) { bestD = d; threat = e }
       }
-      if (!threat) { ctx.reply('nothing hostile in range'); return { ok: true } }
+      if (!threat) { reply('nothing hostile in range'); return { ok: true } }
       const r = pilot.runAway(threat.position.x, threat.position.z, args.radius)
-      ctx.reply(`fleeing from ${threat.name || 'threat'}`)
+      reply(`fleeing from ${threat.name || 'threat'}`)
       return r
     }
 
@@ -318,7 +332,7 @@ async function executeCommand (raw, ctx) {
     case 'follow': {
       if (args.kind === 'off') {
         pilot.stop()
-        ctx.reply('stopped following')
+        reply('stopped following')
         return { ok: true }
       }
       const radius = settings.get('followRadius')
@@ -364,14 +378,14 @@ async function executeCommand (raw, ctx) {
         label = types ? `entity ${types.join('/')}` : 'entities'
       }
       const r = pilot.follow(getter, radius)
-      ctx.reply(`following ${label}`)
+      reply(`following ${label}`)
       return r
     }
 
     case 'attack': {
       if (args.target === null) {
         pilot.stop()
-        ctx.reply('attack off')
+        reply('attack off')
         return { ok: true }
       }
       pilot.startJob('attack', `attack ${args.target}`, (alive) => runCombat(pilot, args.target, alive))
@@ -397,7 +411,7 @@ async function executeCommand (raw, ctx) {
       let to
       if (args.mode === 'selection') {
         const c = selection.cuboid()
-        if (!c) { ctx.reply('no selection — set pos1 and pos2 first (or use excavate x1 y1 z1 x2 y2 z2)'); return { ok: false, error: 'no selection' } }
+        if (!c) { reply('no selection — set pos1 and pos2 first (or use excavate x1 y1 z1 x2 y2 z2)'); return { ok: false, error: 'no selection' } }
         from = { x: c.minX, y: c.minY, z: c.minZ }
         to = { x: c.maxX, y: c.maxY, z: c.maxZ }
       } else {
@@ -412,8 +426,8 @@ async function executeCommand (raw, ctx) {
 
     case 'find': {
       const target = findNearestBlock(pilot, args.block, settings.get('mineScanRadius'))
-      if (!target) { ctx.reply(`no ${args.block} in range`); return { ok: false, error: 'not found' } }
-      ctx.reply(`nearest ${args.block}: ${target.x} ${target.y} ${target.z}`)
+      if (!target) { reply(`no ${args.block} in range`); return { ok: false, error: 'not found' } }
+      reply(`nearest ${args.block}: ${target.x} ${target.y} ${target.z}`)
       return { ok: true, target }
     }
 
@@ -431,9 +445,9 @@ async function executeCommand (raw, ctx) {
       let origin = null
       if (args.waypoint) {
         const resolved = waypoints.resolve(args.waypoint)
-        if (!resolved) { ctx.reply(`no waypoint "${args.waypoint}"`); return { ok: false, error: 'waypoint not found' } }
+        if (!resolved) { reply(`no waypoint "${args.waypoint}"`); return { ok: false, error: 'waypoint not found' } }
         origin = resolved.waypoint
-        ctx.reply(`farming within ${args.range} blocks of ${resolved.waypoint.name}`)
+        reply(`farming within ${args.range} blocks of ${resolved.waypoint.name}`)
       }
       const { runFarm } = require('./processes/farm')
       pilot.startJob('farm', `farm r${args.range}${origin ? ' @' + origin.name : ''}`, (alive) => runFarm(pilot, args.range, alive, origin))
@@ -454,45 +468,45 @@ async function executeCommand (raw, ctx) {
       switch (args.mode) {
         case 'list': {
           const list = waypoints.list(args.tag)
-          if (list.length === 0) { ctx.reply(args.tag ? `no waypoints tagged ${args.tag}` : 'no waypoints saved'); return { ok: true } }
-          for (const w of list) ctx.reply(waypoints.describe(w))
+          if (list.length === 0) { reply(args.tag ? `no waypoints tagged ${args.tag}` : 'no waypoints saved'); return { ok: true } }
+          for (const w of list) reply(waypoints.describe(w))
           return { ok: true, list }
         }
         case 'save': {
           const n = node()
           const r = waypoints.saveWaypoint(args.tag, args.name, n)
-          if (!r.ok) { ctx.reply(r.error); return r }
-          ctx.reply(`saved ${args.name} [${args.tag}] at ${n.x} ${n.y} ${n.z}`)
+          if (!r.ok) { reply(r.error); return r }
+          reply(`saved ${args.name} [${args.tag}] at ${n.x} ${n.y} ${n.z}`)
           return { ok: true }
         }
         case 'goal': {
           const resolved = waypoints.resolve(args.ref)
-          if (!resolved) { ctx.reply(`no waypoint "${args.ref}"`); return { ok: false, error: 'not found' } }
+          if (!resolved) { reply(`no waypoint "${args.ref}"`); return { ok: false, error: 'not found' } }
           if (resolved.kind === 'tag') {
-            ctx.reply(`tag "${args.ref}":`)
-            for (const w of resolved.list) ctx.reply('  ' + waypoints.describe(w))
+            reply(`tag "${args.ref}":`)
+            for (const w of resolved.list) reply('  ' + waypoints.describe(w))
           }
           const w = resolved.waypoint
           return pilot.setGoal(new GoalBlock(w.x, w.y, w.z))
         }
         case 'info': {
           const resolved = waypoints.resolve(args.ref)
-          if (!resolved) { ctx.reply(`no waypoint "${args.ref}"`); return { ok: false, error: 'not found' } }
-          ctx.reply(waypoints.describe(resolved.waypoint) + ` (${new Date(resolved.waypoint.time).toLocaleString()})`)
+          if (!resolved) { reply(`no waypoint "${args.ref}"`); return { ok: false, error: 'not found' } }
+          reply(waypoints.describe(resolved.waypoint) + ` (${new Date(resolved.waypoint.time).toLocaleString()})`)
           return { ok: true }
         }
         case 'delete': {
           const r = waypoints.delete(args.ref)
-          ctx.reply(r.ok ? `deleted ${r.deleted} waypoint(s)` : r.error)
+          reply(r.ok ? `deleted ${r.deleted} waypoint(s)` : r.error)
           return r
         }
         case 'clear': {
           const r = waypoints.clear()
-          ctx.reply(`cleared ${r.deleted} waypoints`)
+          reply(`cleared ${r.deleted} waypoints`)
           return r
         }
         default:
-          ctx.reply('usage: wp <save|goal|list|info|delete|clear> ...')
+          reply('usage: wp <save|goal|list|info|delete|clear> ...')
           return { ok: false }
       }
     }
@@ -507,19 +521,19 @@ async function executeCommand (raw, ctx) {
             ? { x: args.coords[0], y: args.coords[1], z: args.coords[2] }
             : n
           const r = args.action === 'pos1' ? selection.setPos1(at) : selection.setPos2(at)
-          ctx.reply(`${args.action} at ${at.x} ${at.y} ${at.z}`)
+          reply(`${args.action} at ${at.x} ${at.y} ${at.z}`)
           pilot.emit('selection')
           return { ok: true }
         }
         case 'clear': {
           selection.clear()
-          ctx.reply('selection cleared')
+          reply('selection cleared')
           pilot.emit('selection')
           return { ok: true }
         }
         case 'undo': {
           const r = selection.undo()
-          ctx.reply(r.ok ? 'undone' : r.error)
+          reply(r.ok ? 'undone' : r.error)
           pilot.emit('selection')
           return r
         }
@@ -527,7 +541,7 @@ async function executeCommand (raw, ctx) {
         case 'contract':
         case 'shift': {
           const r = selection.transform(args.action, args.n, args.dir)
-          ctx.reply(r.ok ? `${args.action} ${args.n} ${args.dir} — now ${selection.volume()} cells` : r.error)
+          reply(r.ok ? `${args.action} ${args.n} ${args.dir} — now ${selection.volume()} cells` : r.error)
           pilot.emit('selection')
           return r
         }
@@ -545,21 +559,21 @@ async function executeCommand (raw, ctx) {
                 : args.action === 'sphere'
                   ? selection.sphereBlueprint(args.block, args.radius, args.hollow)
                   : selection.cylinderBlueprint(args.block, args.radius, args.height, args.hollow)
-          if (!r.ok) { ctx.reply(r.error); return r }
+          if (!r.ok) { reply(r.error); return r }
           pilot.build(r.blueprint, null)
-          ctx.reply(`building ${args.action} ${args.block} (${r.blueprint.placements.length} cells)`)
+          reply(`building ${args.action} ${args.block} (${r.blueprint.placements.length} cells)`)
           return { ok: true }
         }
         case 'cleararea': {
           const r = selection.clearAreaBlueprint()
-          if (!r.ok) { ctx.reply(r.error); return r }
+          if (!r.ok) { reply(r.error); return r }
           pilot.startJob('excavate', 'cleararea', (alive) => runExcavate(pilot, selection.pos1, selection.pos2, alive))
-          ctx.reply(`clearing ${selection.volume()} cells`)
+          reply(`clearing ${selection.volume()} cells`)
           return { ok: true }
         }
         case 'replace': {
           const c = selection.cuboid()
-          if (!c) { ctx.reply('no selection'); return { ok: false, error: 'no selection' } }
+          if (!c) { reply('no selection'); return { ok: false, error: 'no selection' } }
           pilot.startJob('replace', `replace ${args.from} -> ${args.to}`, async (alive) => {
             // dig every matching cell, then fill with the new block
             const { runExcavate, remaining } = require('./processes/excavate')
@@ -578,25 +592,25 @@ async function executeCommand (raw, ctx) {
             await runBuilder(pilot, fillBp.blueprint, { x: c.minX, y: c.minY, z: c.minZ }, alive)
             return { dug }
           })
-          ctx.reply(`replacing ${args.from} with ${args.to} in the selection`)
+          reply(`replacing ${args.from} with ${args.to} in the selection`)
           return { ok: true }
         }
         case 'copy': {
           const r = selection.copy(pilot.view)
-          ctx.reply(r.ok ? `copied ${r.cells} cells (${r.size.x}x${r.size.y}x${r.size.z})` : r.error)
+          reply(r.ok ? `copied ${r.cells} cells (${r.size.x}x${r.size.y}x${r.size.z})` : r.error)
           return r
         }
         case 'paste': {
-          if (!selection.clipboard) { ctx.reply('clipboard is empty — sel copy first'); return { ok: false, error: 'empty clipboard' } }
+          if (!selection.clipboard) { reply('clipboard is empty — sel copy first'); return { ok: false, error: 'empty clipboard' } }
           const at = args.coords
             ? { x: args.coords[0], y: args.coords[1], z: args.coords[2] }
             : node()
           pilot.build(selection.clipboard, at)
-          ctx.reply(`pasting ${selection.clipboard.placements.length} cells at ${at.x} ${at.y} ${at.z}`)
+          reply(`pasting ${selection.clipboard.placements.length} cells at ${at.x} ${at.y} ${at.z}`)
           return { ok: true }
         }
         default:
-          ctx.reply('usage: sel <pos1|pos2|clear|undo|fill|walls|shell|sphere|cylinder|cleararea|replace|expand|contract|shift|copy|paste> ...')
+          reply('usage: sel <pos1|pos2|clear|undo|fill|walls|shell|sphere|cylinder|cleararea|replace|expand|contract|shift|copy|paste> ...')
           return { ok: false }
       }
     }
@@ -615,7 +629,7 @@ async function executeCommand (raw, ctx) {
           if (s.ok) loaded = { ok: true, blueprint: s.schematic }
         }
       }
-      if (!loaded.ok) { ctx.reply(loaded.error); return loaded }
+      if (!loaded.ok) { reply(loaded.error); return loaded }
       let origin = null
       if (args.origin) {
         const n = node()
@@ -630,7 +644,7 @@ async function executeCommand (raw, ctx) {
 
     case 'litematica': {
       const loaded = await loadSchematicFile(args.file)
-      if (!loaded.ok) { ctx.reply(loaded.error); return loaded }
+      if (!loaded.ok) { reply(loaded.error); return loaded }
       return pilot.build(loaded.schematic, null)
     }
 
@@ -638,24 +652,24 @@ async function executeCommand (raw, ctx) {
     case 'inventory': {
       let items = []
       try { items = bot.inventory ? bot.inventory.items() : [] } catch (e) { items = [] }
-      if (items.length === 0) { ctx.reply('inventory empty'); return { ok: true } }
+      if (items.length === 0) { reply('inventory empty'); return { ok: true } }
       const counts = new Map()
       for (const it of items) counts.set(it.name, (counts.get(it.name) || 0) + (it.count || 1))
-      for (const [n, c] of counts) ctx.reply(`${n} x${c}`)
+      for (const [n, c] of counts) reply(`${n} x${c}`)
       return { ok: true, items: [...counts.entries()] }
     }
 
     case 'drop': {
       const inv = require('./inventory')
       const r = await inv.drop(bot, args)
-      ctx.reply(r.ok ? r.reply : r.error)
+      reply(r.ok ? r.reply : r.error)
       return r
     }
 
     case 'eat': {
       const inv = require('./inventory')
       const r = await inv.eatOnce(bot)
-      ctx.reply(r.ok ? r.reply : r.error)
+      reply(r.ok ? r.reply : r.error)
       return r
     }
 
@@ -670,27 +684,27 @@ async function executeCommand (raw, ctx) {
       settings.set('renderPath', !cur)
       settings.set('renderGoal', !cur)
       pilot.emit('settings')
-      ctx.reply(`path and goal rendering ${!cur ? 'on' : 'off'} (map reloads instantly)`)
+      reply(`path and goal rendering ${!cur ? 'on' : 'off'} (map reloads instantly)`)
       return { ok: true }
     }
 
     case 'repack': {
       pilot.emit('repack')
-      ctx.reply('map cache repack requested')
+      reply('map cache repack requested')
       return { ok: true }
     }
 
     case 'reloadall': {
       waypoints.load()
       pilot.emit('reloadall')
-      ctx.reply(`reloaded ${waypoints.list().length} waypoints`)
+      reply(`reloaded ${waypoints.list().length} waypoints`)
       return { ok: true }
     }
 
     case 'saveall': {
       const w = waypoints.save()
       pilot.emit('saveall')
-      ctx.reply(w.ok ? `saved ${w.count} waypoints to ${waypoints.file}` : w.error)
+      reply(w.ok ? `saved ${w.count} waypoints to ${waypoints.file}` : w.error)
       return w
     }
 
@@ -698,21 +712,21 @@ async function executeCommand (raw, ctx) {
       if (!pilot.mineBlacklist) pilot.mineBlacklist = new Set()
       if (args.mode === 'coords') {
         pilot.mineBlacklist.add(`${args.x},${args.y},${args.z}`)
-        ctx.reply(`blacklisted ${args.x} ${args.y} ${args.z}`)
+        reply(`blacklisted ${args.x} ${args.y} ${args.z}`)
         return { ok: true }
       }
       // blacklist the closest known block of any type the mine process targets
       const n = node()
       pilot.mineBlacklist.add(`${n.x + 1},${n.y},${n.z}`)
-      ctx.reply('blacklisted the block ahead (closest)')
+      reply('blacklisted the block ahead (closest)')
       return { ok: true }
     }
 
     case 'explorefilter': {
       const r = loadExplorefilter(args.file, args.invert)
-      if (!r.ok) { ctx.reply(r.error); return r }
+      if (!r.ok) { reply(r.error); return r }
       ctx.exploreFilter = r.filter
-      ctx.reply(`explore filter: ${r.count} chunks${args.invert ? ' (inverted)' : ''}`)
+      reply(`explore filter: ${r.count} chunks${args.invert ? ' (inverted)' : ''}`)
       return { ok: true, filter: r }
     }
 
@@ -733,17 +747,17 @@ async function executeCommand (raw, ctx) {
     }
 
     case 'litematica': {
-      ctx.reply('litematica loading lands with the builder phase — next push')
+      reply('litematica loading lands with the builder phase — next push')
       return { ok: false, error: 'not implemented yet' }
     }
 
     case 'damn': {
-      ctx.reply('damn daniel... back at it again with the white vans')
+      reply('damn daniel... back at it again with the white vans')
       return { ok: true }
     }
 
     default: {
-      ctx.reply(`unknown command "${name}"`)
+      reply(`unknown command "${name}"`)
       return { ok: false }
     }
   }

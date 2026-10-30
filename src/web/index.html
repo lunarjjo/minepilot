@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>minepilot — cockpit</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header id="hud">
+    <div class="brand">mine<span>pilot</span></div>
+    <div class="stat" id="hud-bot">connecting…</div>
+    <div class="stat hearts" id="hud-health" title="health"></div>
+    <div class="stat food" id="hud-food" title="food"></div>
+    <div class="stat mono" id="hud-pos">–</div>
+    <div class="stat" id="hud-task">idle</div>
+    <div class="stat mono" id="hud-eta"></div>
+    <div class="stat" id="hud-held"></div>
+    <div class="spacer"></div>
+    <div class="stat conn" id="hud-conn">ws</div>
+  </header>
+
+  <main>
+    <div id="map-wrap">
+      <canvas id="map"></canvas>
+      <div id="map-menu" class="popup hidden"></div>
+      <div id="map-hint">left click: goto · left drag: selection · wheel: zoom · right drag: pan</div>
+      <div id="map-scale" class="mono"></div>
+    </div>
+
+    <aside id="side">
+      <div class="tabs" id="side-tabs">
+        <button data-tab="entities" class="active">nearby</button>
+        <button data-tab="waypoints">waypoints</button>
+        <button data-tab="inventory">inventory</button>
+        <button data-tab="settings">settings</button>
+      </div>
+      <div class="tab-body" id="tab-entities">
+        <div id="entity-list" class="list"></div>
+      </div>
+      <div class="tab-body hidden" id="tab-waypoints">
+        <div id="waypoint-list" class="list"></div>
+      </div>
+      <div class="tab-body hidden" id="tab-inventory">
+        <div id="inventory-grid"></div>
+        <div class="row">
+          <input id="inv-filter" placeholder="filter items…">
+        </div>
+      </div>
+      <div class="tab-body hidden" id="tab-settings">
+        <input id="settings-search" placeholder="search settings…">
+        <div id="settings-list" class="list"></div>
+      </div>
+    </aside>
+  </main>
+
+  <footer id="console">
+    <div id="feed"></div>
+    <div class="row">
+      <span class="prompt mono">›</span>
+      <input id="cmd" placeholder="command — try: help · goto 100 64 -200 · mine 16 iron_ore · sel fill dirt · follow players" autocomplete="off" spellcheck="false">
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

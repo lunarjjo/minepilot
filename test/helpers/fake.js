@@ -121,6 +121,10 @@ class FakeBot extends EventEmitter {
 
   // ---- api surface -----------------------------------------------------
 
+  blockAt (v) {
+    return this.world.getBlock(v)
+  }
+
   chat (msg) { this.chats.push(msg) }
 
   setInventory (items) {

@@ -17,6 +17,8 @@ const { SelectionManager } = require('./selection')
 const { createBotSession } = require('./bot')
 const { createChatControl } = require('./chatcontrol')
 const { executeCommand } = require('./commandexec')
+const { MapView } = require('./mapview')
+const { createCockpitServer } = require('./server')
 const inventory = require('./inventory')
 const VERSION = require('../package.json').version
 
@@ -29,6 +31,7 @@ function main () {
   let pilot = null
   let chat = null
   let autoEatTimer = null
+  let mapview = null
 
   const log = (text) => {
     const t = new Date().toISOString().slice(11, 19)
@@ -46,6 +49,22 @@ function main () {
     commander: null,
     exploreFilter: null
   }
+
+  // ------------------------------------------------------------- web console
+  // the mapview rides on ctx: it is created when the bot spawns and
+  // swapped out on disconnect (the cockpit reads ctx.mapview lazily)
+  ctx.mapview = {
+    stats: () => ({ chunks: 0, dirty: 0 }),
+    viewport: () => [],
+    drainDirty: () => [],
+    topOf: () => null,
+    chunkPayload: () => null,
+    cache: { clear () {} }
+  }
+  const cockpit = createCockpitServer(ctx)
+  cockpit.listen(config.appPort).then((addr) => {
+    log(`web cockpit: http://127.0.0.1:${addr.port}`)
+  }).catch((e) => log(`web cockpit failed to start: ${e.message}`))
 
   const session = createBotSession(config, {
     settings,
@@ -65,8 +84,13 @@ function main () {
         try { chat.dispose() } catch (e) { /* ignore */ }
       }
       chat = createChatControl(ctx)
+      try { if (mapview) mapview.dispose() } catch (e) { /* ignore */ }
+      mapview = new MapView(bot, settings)
+      ctx.mapview = mapview
+      cockpit.wireBot(bot)
       startAutoEat(bot)
       log(`minepilot ${VERSION} ready — type commands ("help") or chat "#help" in game`)
+      log(`cockpit map: left click = goto, drag = selection, wheel = zoom`)
     },
     onDeath (bot) {
       if (settings.get('deathWaypoints') && bot.entity && bot.entity.position) {
