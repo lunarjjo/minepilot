@@ -5,13 +5,20 @@
 
 const { GoalNear } = require('../engine/goals')
 
+// name or type — mineflayer versions disagree where the marker lives
+function isItemEntity (e) {
+  if (!e) return false
+  return e.name === 'item' || e.type === 'item' ||
+    (typeof e.displayName === 'string' && e.displayName.toLowerCase() === 'item')
+}
+
 function itemEntities (pilot, radius) {
   const p = pilot.pos()
   if (!p) return []
   const out = []
   try {
     for (const e of Object.values(pilot.bot.entities || {})) {
-      if (!e || e.name !== 'item' || !e.position) continue
+      if (!isItemEntity(e) || !e.position) continue
       if (e.position.distanceTo(p) > radius) continue
       out.push(e)
     }

@@ -13,6 +13,15 @@ const { equipForDig } = require('../autotool')
 
 const OWN_COLUMN_EXEMPT = true // never dig the column the bot stands in
 
+// mineflayer item entities carry the marker on `name` or `type` depending
+// on the version — accept both (and the display name) so drops are never
+// invisible to the collector
+function isItemEntity (e) {
+  if (!e) return false
+  return e.name === 'item' || e.type === 'item' ||
+    (typeof e.displayName === 'string' && e.displayName.toLowerCase() === 'item')
+}
+
 function sleep (ms) {
   return new Promise((r) => setTimeout(r, ms))
 }
@@ -97,16 +106,34 @@ function findNearest (pilot, names) {
 }
 
 // vein mining: after breaking one block, break the adjacent blocks of the
-// same type within veinRadius (baritone treats a connected ore blob as one
-// target). BFS over the 6 face neighbors.
+// same type within veinRadius — for ORE-like targets only (a vein of
+// "grass_block" would otherwise spread across the entire surface), and
+// capped so a huge blob cannot take over the task.
+const ORE_LIKE = /(_ore$|^ore_|ancient_debris)/
+
+function veinEligible (name) {
+  return ORE_LIKE.test(String(name))
+}
+
+const VEIN_MAX_BLOCKS = 8
+
 async function digVein (pilot, start, alive) {
   const veinRadius = pilot.settings ? pilot.settings.get('veinRadius') : 1
   const wantName = pilot.view.name(start.x, start.y, start.z)
   if (!wantName) return 1
+  if (!veinEligible(wantName)) {
+    // plain blocks: exactly the one target, no vein expansion
+    if (pilot.settings && pilot.settings.get('autoTool')) {
+      const { equipForDig } = require('../autotool')
+      await equipForDig(pilot.bot, wantName)
+    }
+    const ok = await pilot.digCell(start)
+    return ok ? 1 : 0
+  }
   const queue = [{ ...start, d: 0 }]
   const seen = new Set([start.x + ',' + start.y + ',' + start.z])
   let dug = 0
-  while (queue.length > 0 && alive()) {
+  while (queue.length > 0 && alive() && dug < VEIN_MAX_BLOCKS) {
     const cell = queue.shift()
     if (pilot.view.name(cell.x, cell.y, cell.z) !== wantName) continue
     if (pilot.settings && pilot.settings.get('autoTool')) {
@@ -123,7 +150,7 @@ async function digVein (pilot, start, alive) {
         const k = nx + ',' + ny + ',' + nz
         if (seen.has(k)) continue
         seen.add(k)
-        if (pilot.view.name(nx, ny, nz) === wantName) {
+        if (pilot.view.name(nx, ny, nz) === wantName && seen.size < VEIN_MAX_BLOCKS * 2) {
           queue.push({ x: nx, y: ny, z: nz, d: cell.d + 1 })
         }
       }
@@ -132,19 +159,45 @@ async function digVein (pilot, start, alive) {
   return dug
 }
 
-// give dropped items a moment to reach the inventory before moving on — a
-// bot that walks away from its own drops mines thin air next tick
+// give dropped items a moment to reach the inventory, then actively walk
+// over whatever did not fly to us — drops that fall into the dig hole
+// never arrive on their own (the lesson every live gather learns)
 async function waitPickup (pilot) {
   const t0 = Date.now()
-  const nearbyItems = () => {
+  const nearbyItems = (radius) => {
     try {
       return Object.values(pilot.bot.entities || {}).filter((e) =>
-        e && e.name === 'item' && e.position && pilot.bot.entity &&
-        e.position.distanceTo(pilot.bot.entity.position) < 2.5).length
-    } catch (e) { return 0 }
+        isItemEntity(e) && e.position && pilot.bot.entity &&
+        e.position.distanceTo(pilot.bot.entity.position) < radius)
+    } catch (e) { return [] }
   }
-  while (Date.now() - t0 < 1200 && nearbyItems() > 0) {
+  while (Date.now() - t0 < 1200 && nearbyItems(2.5).length > 0) {
     await sleep(150)
+  }
+  // still-loose drops nearby: walk to them (radius-tolerant — drops land
+  // in the dig hole, and a radius-0 goal on a sunken item is unreachable)
+  const loose = nearbyItems(6)
+  if (loose.length > 0) {
+    loose.sort((a, b) => a.position.distanceTo(pilot.bot.entity.position) - b.position.distanceTo(pilot.bot.entity.position))
+    for (const item of loose.slice(0, 4)) {
+      const x = Math.floor(item.position.x)
+      const y = Math.floor(item.position.y)
+      const z = Math.floor(item.position.z)
+      let arrived = false
+      for (const radius of [1, 2]) {
+        const r = pilot.driveTo(new GoalNear(x, y, z, radius))
+        if (r && (r.status === 'found' || r.status === 'partial')) {
+          if (r.moves && r.moves.length > 0) {
+            await pilot.waitArrival(10000)
+          }
+          arrived = true
+          break
+        }
+      }
+      // give the server a moment to run the pickup into the inventory
+      await sleep(400)
+      void arrived
+    }
   }
 }
 
@@ -195,7 +248,9 @@ async function runMine (pilot, names, count, alive) {
     const got = await digVein(pilot, target, alive)
     dug += got
     pilot.emit('progress', { index: dug, total: count })
-    await waitPickup(pilot)
+    if (!pilot.settings || pilot.settings.get('mineScanDroppedItems') !== false) {
+      await waitPickup(pilot)
+    }
   }
   pilot.emit('log', `mined ${dug} ${names[0]}${dug === 1 ? '' : 's'}`)
   return { dug, wanted: count }

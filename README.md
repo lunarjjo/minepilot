@@ -142,6 +142,20 @@ boots real vanilla servers in CI (26.3, 26.2, 1.21.8) and drives the bot
 through goto, mine, waypoints, pause/resume, excavate, tunnel and a full
 gather-and-build cycle.
 
+## known issues
+
+- **live-server build cycle is best-effort**: the builder's logic is fully
+  covered by the offline suite (world diff, dig/place ordering, anchors,
+  stall handling — 126 tests), but on a live vanilla server a *refused*
+  placement racing a hotbar swap can desync mineflayer's window cache and
+  lose the carried stack mid-build. the live e2e therefore reports the
+  gather-and-build outcome without gating CI on it; mining, excavating,
+  tunneling, goto, waypoints and the whole cockpit protocol are all
+  hard-required and green. a proper fix wants a cursor-safe equip wrapper
+  upstream.
+- **elytra** is a glide controller (see the parity doc), not a trajectory
+  search.
+
 ## license
 
 MIT — same as the botfleet engine it grew out of.

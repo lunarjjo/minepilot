@@ -208,6 +208,15 @@ test('commands: minepilot extras parse', () => {
   assert.strictEqual(r.args.mode, 'all')
 })
 
+test('commands: pause, resume and paused parse bare', () => {
+  for (const c of ['pause', 'resume', 'paused']) {
+    const r = parseCommand(c)
+    assert.strictEqual(r.ok, true, c)
+    assert.deepStrictEqual(r.args, {})
+  }
+  assert.strictEqual(parseCommand('pause now').ok, false)
+})
+
 test('commands: damn daniel works, other words do not', () => {
   assert.strictEqual(parseCommand('damn daniel').ok, true)
   assert.strictEqual(parseCommand('damn').ok, false)
@@ -293,6 +302,25 @@ test('mine process: digs the vein including adjacent ores', async () => {
   assert.strictEqual(dug, 3, 'three connected ores broken')
   assert.strictEqual(w.blockAtXYZ(3, 62, 2).name, 'diamond_ore', 'the isolated ore survives')
   assert.strictEqual(w.blockAtXYZ(3, 63, 0).name, 'air')
+})
+
+test('mine process: plain blocks do not vein-expand, ores do', async () => {
+  const w = new VoxelWorld()
+  w.fill(-6, 58, -6, 6, 63, 6, 'grass_block')
+  w.fill(-6, 64, -6, 6, 70, 6, 'air')
+  // a wide patch of surface grass (non-ore) and a small diamond vein
+  const { digVein } = require('../src/processes/mine')
+  const { pilot } = makePilot(w)
+  // grass: exactly one block, no spread across the surface
+  const grassDug = await digVein(pilot, { x: 2, y: 63, z: 2 }, () => true)
+  assert.strictEqual(grassDug, 1, 'plain blocks break alone')
+  assert.strictEqual(w.blockAtXYZ(3, 63, 2).name, 'grass_block', 'neighbors untouched')
+  // ore: the connected vein breaks together
+  w.setBlock(-3, 63, -3, 'diamond_ore')
+  w.setBlock(-3, 63, -2, 'diamond_ore')
+  const oreDug = await digVein(pilot, { x: -3, y: 63, z: -3 }, () => true)
+  assert.strictEqual(oreDug, 2)
+  assert.strictEqual(w.blockAtXYZ(-3, 63, -2).name, 'air')
 })
 
 test('mine process: never targets the column the bot stands in', async () => {

@@ -36,6 +36,18 @@ if [ ! -f server.jar ]; then
 fi
 
 [ -f eula.txt ] || echo 'eula=true' > eula.txt
+
+# op the demo bot (offline uuid) so e2e runs can /give themselves materials
+BOT_OPS_UUID=$(node -e "
+const crypto = require('crypto')
+const h = crypto.createHash('md5').update('OfflinePlayer:' + (process.env.MINEPILOT_USERNAME || 'Minepilot')).digest()
+h[6] = (h[6] & 0x0f) | 0x30
+h[8] = (h[8] & 0x3f) | 0x80
+const s = h.toString('hex')
+console.log(s.slice(0,8) + '-' + s.slice(8,12) + '-' + s.slice(12,16) + '-' + s.slice(16,20) + '-' + s.slice(20))
+" 2>/dev/null || echo 8628d38b-3759-3cc8-9693-a7e097beb72b)
+printf '[{"uuid":"%s","name":"%s","level":4,"bypassesPlayerLimit":true}]\n' "$BOT_OPS_UUID" "${MINEPILOT_USERNAME:-Minepilot}" > ./ops.json
+
 if [ ! -f server.properties ]; then
   PROPS="online-mode=false
 server-port=$PORT

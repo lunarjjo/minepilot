@@ -38,6 +38,8 @@ const FOLLOW_REFRESH_MS = 1500
 const REPLAN_DEBOUNCE_MS = 400
 const MAX_CONSECUTIVE_FAILS = 3
 const MAX_PATH_POINTS = 512
+const HOSTILE_RE = /zombie|skeleton|creeper|spider|cave_spider|enderman|witch|blaze|ghast|slime|magma_cube|pillager|vindicator|evoker|ravager|phantom|drowned|husk|stray|wither_skeleton|piglin|hoglin|zoglin|warden|breeze|bogged/
+
 const CHUNK_LOAD_GRACE_TRIES = 4
 const CHUNK_LOAD_WAIT_MS = 1200
 
@@ -148,13 +150,49 @@ class Autopilot extends EventEmitter {
 
   // ---- planning ---------------------------------------------------------
 
+  // hostile positions for the avoidance penalty (the avoidance setting)
+  hostilePositions () {
+    if (!this.settings.get('avoidance')) return null
+    const radius = this.settings.get('mobAvoidanceRadius')
+    const p = this.pos()
+    if (!p) return null
+    const out = []
+    try {
+      for (const e of Object.values(this.bot.entities || {})) {
+        if (!e || !e.position || e === this.bot.entity) continue
+        const n = String(e.name || e.type || '')
+        if (!HOSTILE_RE.test(n)) continue
+        if (e.position.distanceTo(p) > radius + 16) continue
+        out.push(e.position)
+      }
+    } catch (e) { return null }
+    return out.length > 0 ? { radius, coeff: this.settings.get('mobAvoidanceCoefficient'), list: out } : null
+  }
+
   planNow (goal) {
     const start = this.node()
     if (!start) return { status: 'nopos' }
     if (goal.isMet(start.x, start.y, start.z)) {
       return { status: 'found', moves: [], nodes: [start], cost: 0 }
     }
-    return search(start, goal, (n) => generate(this.view, n, this.s), {
+    // avoidance: nodes near hostiles cost extra, steering plans around
+    // danger the way baritone's avoidance setting does
+    const hostiles = this.hostilePositions()
+    const neighbors = (n) => {
+      const moves = generate(this.view, n, this.s)
+      if (!hostiles) return moves
+      for (const m of moves) {
+        for (const h of hostiles.list) {
+          const d = Math.hypot(m.to.x + 0.5 - h.x, m.to.y + 0.5 - h.y, m.to.z + 0.5 - h.z)
+          if (d < hostiles.radius) {
+            m.cost += hostiles.coeff * (1 - d / hostiles.radius) * 4
+            break
+          }
+        }
+      }
+      return moves
+    }
+    return search(start, goal, neighbors, {
       maxNodes: this.s.maxNodes,
       timeoutMs: this.s.timeoutMs
     })

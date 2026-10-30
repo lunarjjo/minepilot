@@ -292,6 +292,7 @@ function createDefaultSettings () {
   s.define('toolSwapDelayMs', 'int', 150, 'pause between inventory swaps, anti-cheat friendliness', 'inventory', { min: 0, max: 1000 })
   s.define('acceptableThrowawayItems', 'items', ['dirt', 'cobblestone', 'netherrack', 'stone', 'andesite', 'diorite', 'granite', 'gravel', 'sand', 'tuff', 'cobbled_deepslate', 'deepslate'], 'items acceptable to use as filler blocks when bridging', 'inventory')
   s.define('autoEat', 'bool', true, 'eat when hunger drops', 'inventory')
+  s.define('autoDefend', 'bool', true, 'fight back when a hostile attacks the bot (uses the combat process)', 'inventory')
   s.define('autoEatThreshold', 'int', 14, 'food level that triggers auto-eat', 'inventory', { min: 1, max: 20 })
   s.define('dropExcessWhenFull', 'bool', true, 'toss a throwaway stack when the inventory is full and a pickup is pending', 'inventory')
 

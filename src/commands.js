@@ -298,6 +298,8 @@ function parseCommand (raw) {
     case 'reloadall':
     case 'saveall':
     case 'surface':
+    case 'pause':
+    case 'resume':
     case 'paused':
     case 'cancel':
     case 'stop':

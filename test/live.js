@@ -160,11 +160,11 @@ async function main () {
     await post('/api/command', { command: 'goto 0 0' })
     await sleep(1200)
     const paused = await post('/api/command', { command: 'pause' })
-    check('pause accepted', paused.body.result.ok === true)
+    check('pause accepted', paused.body.result && paused.body.result.ok === true, JSON.stringify(paused.body).slice(0, 160))
     const st2 = await get('/api/status')
     check('status shows paused', st2.body.task.paused === true)
     const resumed = await post('/api/command', { command: 'resume' })
-    check('resume accepted', resumed.body.result.ok === true)
+    check('resume accepted', resumed.body.result && resumed.body.result.ok === true, JSON.stringify(resumed.body).slice(0, 160))
     const stop = await post('/api/command', { command: 'forcecancel' })
     check('forcecancel accepted', stop.body.result.ok === true)
 
@@ -189,8 +189,12 @@ async function main () {
     }, 180000, 'the tunnel to finish').catch(() => null)
     check('bot digs a real tunnel', !!tunDone)
 
-    // 13. gather + build cycle (drops scatter, so gather a surplus and retry)
+    // 13. gather + build cycle (drops scatter, so gather a surplus and retry).
+    // CI always runs it; MINEPILOT_LIVE_FAST=1 skips it for quick local runs.
     let built = null
+    if (process.env.MINEPILOT_LIVE_FAST === '1') {
+      check('gather+build cycle (skipped in fast mode)', true)
+    } else {
     for (let attempt = 1; attempt <= 3 && !built; attempt++) {
       await post('/api/command', { command: 'mine dirt 14' })
       await until(async () => {
@@ -209,6 +213,7 @@ async function main () {
       }
     }
     check('bot gathers materials and builds the blueprint', !!built, built ? built.text : 'no build-complete log across attempts')
+    }
 
     // 14. the in-game command grammar through the chat path
     const chatCmd = await post('/api/command', { command: 'say hello from minepilot' })

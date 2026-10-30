@@ -110,6 +110,18 @@ if [ ! -f "$MC_DIR/server.jar" ]; then
 fi
 
 printf 'eula=true\n' > "$MC_DIR/eula.txt"
+
+# op the demo bot (offline uuid) so e2e runs can /give themselves materials
+BOT_OPS_UUID=$(node -e "
+const crypto = require('crypto')
+const h = crypto.createHash('md5').update('OfflinePlayer:' + (process.env.MINEPILOT_USERNAME || 'Minepilot')).digest()
+h[6] = (h[6] & 0x0f) | 0x30
+h[8] = (h[8] & 0x3f) | 0x80
+const s = h.toString('hex')
+console.log(s.slice(0,8) + '-' + s.slice(8,12) + '-' + s.slice(12,16) + '-' + s.slice(16,20) + '-' + s.slice(20))
+" 2>/dev/null || echo 8628d38b-3759-3cc8-9693-a7e097beb72b)
+printf '[{"uuid":"%s","name":"%s","level":4,"bypassesPlayerLimit":true}]\n' "$BOT_OPS_UUID" "${MINEPILOT_USERNAME:-Minepilot}" > $MC_DIR/ops.json
+
 if [ ! -f "$MC_DIR/server.properties" ]; then
   cat > "$MC_DIR/server.properties" <<PROPS
 online-mode=false
@@ -122,7 +134,9 @@ sync-chunk-writes=false
 motd=minepilot demo
 max-players=8
 white-list=false
+spawn-monsters=false
 level-type=$MC_LEVEL
+spawn-monsters=false
 PROPS
 fi
 # minecraft 26.x regenerates server.properties with white-list=true when the

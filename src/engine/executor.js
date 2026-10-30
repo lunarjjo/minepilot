@@ -432,7 +432,7 @@ class Executor extends EventEmitter {
         this.control('jump', false)
       }
     } catch (e) {
-      this.emit('log', 'place failed: ' + String(e.message || e).slice(0, 60))
+      this.emit('log', 'place failed: ' + String(e.message || e).slice(0, 160))
       this.bumpPlaceTries()
     } finally {
       this.placing = false

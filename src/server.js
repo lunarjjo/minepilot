@@ -53,7 +53,9 @@ function readBody (req) {
 }
 
 function createCockpitServer (ctx) {
-  const { pilot, settings, selection, waypoints } = ctx
+  // settings/selection/waypoints are stable; the pilot and the bot are
+  // swapped on every (re)spawn, so they are ALWAYS read through ctx
+  const { settings, selection, waypoints } = ctx
   // the mapview rides on ctx so it can be swapped when the bot (re)spawns
   const mapview = () => ctx.mapview
   const state = { startedAt: Date.now() }
@@ -93,13 +95,13 @@ function createCockpitServer (ctx) {
         return sendJson(res, 200, {
           ok: true,
           bot: ctx.bot ? (ctx.bot.username || 'pending') : 'disconnected',
-          task: pilot ? pilot.task : 'idle',
+          task: ctx.pilot ? ctx.pilot.task : 'idle',
           uptime: Math.floor((Date.now() - state.startedAt) / 1000),
           version: require('../package.json').version
         })
       }
       if (url === '/api/status') {
-        const node = pilot ? pilot.node() : null
+        const node = ctx.pilot ? ctx.pilot.node() : null
         return sendJson(res, 200, {
           connected: !!ctx.bot,
           username: ctx.bot ? ctx.bot.username : null,
@@ -107,7 +109,7 @@ function createCockpitServer (ctx) {
           position: node,
           health: ctx.bot ? ctx.bot.health : null,
           food: ctx.bot ? ctx.bot.food : null,
-          task: pilot ? pilot.info() : null,
+          task: ctx.pilot ? ctx.pilot.info() : null,
           selection: selection.snapshot(),
           waypoints: waypoints.list(),
           map: mapview().stats()
@@ -120,7 +122,7 @@ function createCockpitServer (ctx) {
         const body = await readBody(req)
         if (!body.key) return sendJson(res, 400, { error: 'key required' })
         const r = settings.set(body.key, body.value)
-        if (r.ok && pilot) pilot.syncFromSettings()
+        if (r.ok && ctx.pilot) ctx.pilot.syncFromSettings()
         return sendJson(res, r.ok ? 200 : 400, r)
       }
       if (url === '/api/waypoints' && req.method === 'GET') {
@@ -228,7 +230,7 @@ function createCockpitServer (ctx) {
       }
       case 'set': {
         const r = settings.set(msg.key, msg.value)
-        if (r.ok && pilot) pilot.syncFromSettings()
+        if (r.ok && ctx.pilot) ctx.pilot.syncFromSettings()
         broadcast({ t: 'settings', settings: settings.list() })
         if (!r.ok) broadcast({ t: 'log', text: `${msg.key}: ${r.error}` })
         break
@@ -261,10 +263,10 @@ function createCockpitServer (ctx) {
 
   // ------------------------------------------------------------- ticks
   function stateTick () {
-    if (!ctx.bot || !pilot) return
-    const node = pilot.node()
+    if (!ctx.bot || !ctx.pilot) return
+    const node = ctx.pilot.node()
     const e = ctx.bot.entity
-    const eta = pilot.eta()
+    const eta = ctx.pilot.eta()
     broadcast({
       t: 'state',
       pos: e && e.position ? [e.position.x, e.position.y, e.position.z] : null,
@@ -272,10 +274,10 @@ function createCockpitServer (ctx) {
       yaw: e ? e.yaw : null,
       health: ctx.bot.health,
       food: ctx.bot.food,
-      task: pilot.info(),
+      task: ctx.pilot.info(),
       eta: eta.ok ? { blocks: eta.blocks, seconds: eta.seconds, arrived: eta.arrived } : null,
       held: ctx.bot.heldItem ? ctx.bot.heldItem.name : null,
-      paused: pilot.paused
+      paused: ctx.pilot.paused
     })
   }
 
@@ -302,12 +304,12 @@ function createCockpitServer (ctx) {
   }
 
   function pathTick () {
-    if (!pilot) return
+    if (!ctx.pilot) return
     broadcast({
       t: 'path',
-      points: pilot.pathPoints(),
-      goal: pilot.goalLabel,
-      partial: pilot.partial
+      points: ctx.pilot.pathPoints(),
+      goal: ctx.pilot.goalLabel,
+      partial: ctx.pilot.partial
     })
   }
 
@@ -352,12 +354,12 @@ function createCockpitServer (ctx) {
     })
     const pushWaypoints = () => broadcast({ t: 'waypoints', waypoints: waypoints.list() })
     bot.on('death', pushWaypoints)
-    if (pilot) {
-      pilot.on('selection', () => broadcast({ t: 'selection', selection: selection.snapshot() }))
-      pilot.on('log', (text) => broadcast({ t: 'log', text }))
-      pilot.on('saveall', pushWaypoints)
-      pilot.on('reloadall', pushWaypoints)
-      pilot.on('repack', () => {
+    if (ctx.pilot) {
+      ctx.pilot.on('selection', () => broadcast({ t: 'selection', selection: selection.snapshot() }))
+      ctx.pilot.on('log', (text) => broadcast({ t: 'log', text }))
+      ctx.pilot.on('saveall', pushWaypoints)
+      ctx.pilot.on('reloadall', pushWaypoints)
+      ctx.pilot.on('repack', () => {
         if (mapview() && mapview().cache) mapview().cache.clear()
         if (viewport) {
           const chunks = mapview().viewport(viewport.cx0, viewport.cz0, viewport.cx1, viewport.cz1)

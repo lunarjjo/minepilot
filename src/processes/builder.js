@@ -125,7 +125,7 @@ async function doPlace (pilot, cell, blockName) {
   try {
     await pilot.placeRefFace(ref, anchor.face)
   } catch (e) {
-    pilot.emit('log', `place refused: ${String(e.message || e).slice(0, 60)}`)
+    pilot.emit('log', `place refused: ${String(e.message || e).slice(0, 160)}`)
     return false
   }
   const after = worldName(pilot, cell.x, cell.y, cell.z)

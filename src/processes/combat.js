@@ -12,7 +12,7 @@ const REACH = 3.4
 function entityName (e) {
   if (!e) return null
   if (e.username) return e.username
-  return e.name || (e.type) || null
+  return e.name || e.type || null
 }
 
 // find the closest matching living entity

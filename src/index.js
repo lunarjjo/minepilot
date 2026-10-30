@@ -22,6 +22,8 @@ const { createCockpitServer } = require('./server')
 const inventory = require('./inventory')
 const VERSION = require('../package.json').version
 
+const HOSTILES = /zombie|skeleton|creeper|spider|cave_spider|enderman|witch|blaze|ghast|slime|magma_cube|pillager|vindicator|evoker|ravager|phantom|drowned|husk|stray|wither_skeleton|piglin|hoglin|zoglin|warden|breeze|bogged/
+
 function main () {
   const config = loadConfig()
   const settings = createDefaultSettings()
@@ -89,6 +91,7 @@ function main () {
       ctx.mapview = mapview
       cockpit.wireBot(bot)
       startAutoEat(bot)
+      startAutoDefend()
       log(`minepilot ${VERSION} ready — type commands ("help") or chat "#help" in game`)
       log(`cockpit map: left click = goto, drag = selection, wheel = zoom`)
     },
@@ -113,6 +116,10 @@ function main () {
         clearInterval(autoEatTimer)
         autoEatTimer = null
       }
+      if (autoDefendTimer) {
+        clearInterval(autoDefendTimer)
+        autoDefendTimer = null
+      }
     }
   })
 
@@ -126,6 +133,41 @@ function main () {
     }, 4000)
     if (autoEatTimer.unref) autoEatTimer.unref()
   }
+
+  // autoDefend: slimes happen. a hostile within sword reach interrupts
+  // whatever is running (a dead bot loses the task anyway).
+  let defendBusy = false
+  function startAutoDefend () {
+    if (autoDefendTimer) clearInterval(autoDefendTimer)
+    autoDefendTimer = setInterval(async () => {
+      if (!settings.get('autoDefend')) return
+      if (!ctx.bot || !ctx.pilot || defendBusy) return
+      const p = ctx.bot.entity && ctx.bot.entity.position
+      if (!p) return
+      let threat = null
+      let bestD = Infinity
+      try {
+        for (const e of Object.values(ctx.bot.entities || {})) {
+          if (!e || !e.position || e === ctx.bot.entity) continue
+          const n = String(e.name || e.type || '')
+          if (!HOSTILES.test(n)) continue
+          const d = e.position.distanceTo(p)
+          if (d < bestD) { bestD = d; threat = e }
+        }
+      } catch (e) { return }
+      if (!threat || bestD > 4.5) return
+      defendBusy = true
+      const target = threat.name || threat.type
+      log(`autoDefend: ${target} at ${bestD.toFixed(1)} blocks — fighting back`)
+      try {
+        const { runCombat } = require('./processes/combat')
+        await runCombat(ctx.pilot, target, () => true)
+      } catch (e) { /* it died or vanished */ }
+      defendBusy = false
+    }, 1500)
+    if (autoDefendTimer.unref) autoDefendTimer.unref()
+  }
+  let autoDefendTimer = null
 
   // ---------------------------------------------------------------- stdin
   const readline = require('readline')
