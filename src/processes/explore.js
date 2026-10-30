@@ -23,8 +23,9 @@ function ckey (cx, cz) {
 // nearest chunk-center target that has not been visited yet, measured
 // from the exploration ORIGIN (not the current position) — baritone
 // explores a bounded ring around where the process started, otherwise a
-// target-chasing walk drifts across the map without ever finishing
-function pickTarget (pilot, visited, radius, origin) {
+// target-chasing walk drifts across the map without ever finishing.
+// an optional filter(cx, cz) vetoes chunks (the explorefilter command).
+function pickTarget (pilot, visited, radius, origin, filter) {
   const p = origin || pilot.pos()
   const live = pilot.pos()
   if (!p) return null
@@ -39,6 +40,7 @@ function pickTarget (pilot, visited, radius, origin) {
       const cz = ccz + dz
       const k = ckey(cx, cz)
       if (visited.has(k)) continue
+      if (filter && !filter(cx, cz)) continue
       const tx = cx * CHUNK + CHUNK / 2
       const tz = cz * CHUNK + CHUNK / 2
       const d = Math.hypot(tx - p.x, tz - p.z)
@@ -56,21 +58,29 @@ function pickTarget (pilot, visited, radius, origin) {
   return best
 }
 
-// roam until the ring around the origin is covered. returns { legs }.
-async function runExplore (pilot, radius, alive) {
+// roam until the ring around the origin is covered. opts: { origin: {x, z},
+// filter: (cx, cz) => bool }. returns { legs }.
+async function runExplore (pilot, radius, alive, opts) {
+  const o = opts || {}
+  const filter = o.filter || null
   const visited = new Set()
-  const origin = pilot.node()
-  if (origin) {
-    visited.add(ckey(Math.floor(origin.x / CHUNK), Math.floor(origin.z / CHUNK)))
+  let originNode
+  if (o.origin && Number.isFinite(o.origin.x) && Number.isFinite(o.origin.z)) {
+    originNode = { x: Math.floor(o.origin.x), y: 64, z: Math.floor(o.origin.z) }
+  } else {
+    originNode = pilot.node()
+  }
+  if (originNode) {
+    visited.add(ckey(Math.floor(originNode.x / CHUNK), Math.floor(originNode.z / CHUNK)))
   } else {
     return { legs: 0 }
   }
-  const originPos = { x: origin.x, z: origin.z }
+  const originPos = { x: originNode.x, z: originNode.z }
 
   let legs = 0
   let fails = 0
   while (alive() && legs < MAX_LEGS) {
-    const target = pickTarget(pilot, visited, radius, originPos)
+    const target = pickTarget(pilot, visited, radius, originPos, filter)
     if (!target) {
       pilot.emit('log', `explored ${legs} targets within ${radius} blocks`)
       return { legs }

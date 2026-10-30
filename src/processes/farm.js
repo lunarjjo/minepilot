@@ -30,13 +30,18 @@ function matureCrop (block) {
   return age >= c.maxAge ? c : null
 }
 
-// collect mature crops within radius of the bot, nearest first
-function scan (pilot, radius) {
-  const p = pilot.pos()
+// collect mature crops within radius of the scan center (the bot, or a
+// waypoint the farm was anchored to), nearest first. the own-column rule
+// always protects the BOT's column, wherever the scan is centered.
+function scan (pilot, radius, center) {
+  const p = center || pilot.pos()
+  const bp = pilot.pos()
   if (!p) return []
   const cx = Math.floor(p.x)
   const cy = Math.floor(p.y)
   const cz = Math.floor(p.z)
+  const ownX = bp ? Math.floor(bp.x) : null
+  const ownZ = bp ? Math.floor(bp.z) : null
   const r = Math.max(2, Math.min(48, Math.floor(radius)))
   const found = []
   for (let dy = -SCAN_BAND; dy <= SCAN_BAND; dy++) {
@@ -50,7 +55,7 @@ function scan (pilot, radius) {
         const crop = matureCrop(block)
         if (!crop) continue
         // never harvest the column we stand in — same rule as mining
-        if (dx === 0 && dz === 0) continue
+        if (ownX !== null && cx + dx === ownX && cz + dz === ownZ) continue
         found.push({ x, y, z, crop, d: dx * dx + dy * dy + dz * dz })
       }
     }
@@ -89,11 +94,13 @@ async function harvest (pilot, target, alive) {
   return true
 }
 
-// run a farm pass. returns { harvested, replanted-ready info }.
-async function runFarm (pilot, radius, alive) {
-  const crops = scan(pilot, radius)
+// run a farm pass. origin: optional { x, y, z } waypoint the range is
+// measured from (baritone's farm <range> <waypoint>). returns the harvest.
+async function runFarm (pilot, radius, alive, origin) {
+  const center = origin || null
+  const crops = scan(pilot, radius, center)
   if (crops.length === 0) {
-    pilot.emit('log', `no mature crops within ${radius} blocks`)
+    pilot.emit('log', `no mature crops within ${radius} blocks${center ? ' of the waypoint' : ''}`)
     return { harvested: 0 }
   }
   let harvested = 0

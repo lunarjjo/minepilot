@@ -149,10 +149,13 @@ async function runMine (pilot, names, count, alive) {
       break
     }
     // stand within reach of the ore: GoalNear radius 1 (adjacent or on top),
-    // the dig reach is 4.2 so a radius-1 arrival always reaches the vein
+    // the dig reach is 4.2 so a radius-1 arrival always reaches the vein.
+    // driveTo (not planNow + executor.run) keeps the autopilot's replan
+    // wiring alive: if the plan goes stale (the bot fell into the vein,
+    // the world changed), splices trigger real replans.
     const goal = new GoalNear(target.x, target.y, target.z, 1)
-    const r = pilot.planNow(goal)
-    if (r.status !== 'found' && r.status !== 'partial') {
+    const r = pilot.driveTo(goal)
+    if (!r || (r.status !== 'found' && r.status !== 'partial' && r.status !== 'partial-stuck')) {
       if (pilot.settings && pilot.settings.get('blacklistClosestOnFailure')) {
         blacklist.add(target.x + ',' + target.y + ',' + target.z)
         pilot.emit('log', `blacklisted unreachable ${names[0]} at ${target.x} ${target.y} ${target.z}`)
@@ -167,9 +170,7 @@ async function runMine (pilot, names, count, alive) {
       if (dug === 0) throw new Error(`cannot reach any ${names[0]}`)
       break
     }
-    pilot.pathPointsCache = r.nodes ? r.nodes.map((n) => [n.x, n.y, n.z]) : []
     if (r.moves && r.moves.length > 0) {
-      pilot.executor.run(r.moves)
       const done = await pilot.waitArrival()
       if (!done) {
         if (pilot.settings && pilot.settings.get('blacklistClosestOnFailure')) {

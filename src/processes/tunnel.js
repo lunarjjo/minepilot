@@ -59,13 +59,15 @@ async function digSlice (pilot, cells, alive) {
   return true
 }
 
-// walk forward into the cleared slice
+// walk forward into the cleared slice. driveTo keeps the replan wiring
+// alive (a stale plan after falling into a dug cell gets spliced and
+// replanned, instead of dead-looping the executor).
 async function stepForward (pilot, x, y, z, dx, dz, k) {
   const tx = x + dx * k
   const tz = z + dz * k
-  const r = pilot.planNow(new GoalBlock(tx, y, tz))
-  if (r.status !== 'found' && r.status !== 'partial') return false
-  pilot.executor.run(r.moves)
+  const r = pilot.driveTo(new GoalBlock(tx, y, tz))
+  if (!r || (r.status !== 'found' && r.status !== 'partial' && r.status !== 'partial-stuck')) return false
+  if (!r.moves || r.moves.length === 0) return true
   return pilot.waitArrival(15000)
 }
 

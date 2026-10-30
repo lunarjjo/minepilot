@@ -26,6 +26,8 @@ const { runTunnel } = require('./processes/tunnel')
 const { runExcavate } = require('./processes/excavate')
 const { runGetToBlock, runClick, findNearestBlock } = require('./processes/gotoblock')
 const { parseBlueprint, loadBlueprintFile } = require('./util/blueprints')
+const { loadSchematicFile } = require('./util/schematics')
+const { loadExplorefilter } = require('./util/explorefilter')
 const { normCuboid } = require('./selection')
 
 const VERSION = require('../package.json').version
@@ -426,12 +428,25 @@ async function executeCommand (raw, ctx) {
 
     // ---------------------------------------------------------- farming
     case 'farm': {
-      // waypoint-limited farm comes with the farm process phase; range only
-      return pilot.farm(args.range)
+      let origin = null
+      if (args.waypoint) {
+        const resolved = waypoints.resolve(args.waypoint)
+        if (!resolved) { ctx.reply(`no waypoint "${args.waypoint}"`); return { ok: false, error: 'waypoint not found' } }
+        origin = resolved.waypoint
+        ctx.reply(`farming within ${args.range} blocks of ${resolved.waypoint.name}`)
+      }
+      const { runFarm } = require('./processes/farm')
+      pilot.startJob('farm', `farm r${args.range}${origin ? ' @' + origin.name : ''}`, (alive) => runFarm(pilot, args.range, alive, origin))
+      return { ok: true, reply: `farming within ${args.range} blocks${origin ? ' of ' + origin.name : ''}` }
     }
 
     case 'explore': {
-      return pilot.explore(args.radius || 256)
+      const { runExplore } = require('./processes/explore')
+      const origin = (args.x !== null && args.z !== null) ? { x: args.x, z: args.z } : null
+      const radius = args.radius || 256
+      const filter = ctx.exploreFilter || null
+      pilot.startJob('explore', `explore r${radius}`, (alive) => runExplore(pilot, radius, alive, { origin, filter }))
+      return { ok: true, reply: `exploring ${origin ? `from ${origin.x} ${origin.z}` : 'from here'} within ${radius} blocks` }
     }
 
     // ------------------------------------------------------- waypoints
@@ -588,7 +603,18 @@ async function executeCommand (raw, ctx) {
 
     // --------------------------------------------------------- building
     case 'build': {
-      const loaded = loadBlueprintFile(args.schematic)
+      // schematic formats (nbt) load through the schematic parser; plain
+      // names fall back to the json blueprint library
+      let loaded = null
+      if (/\.(litematic|schem|schematic)$/.test(args.schematic)) {
+        loaded = await loadSchematicFile(args.schematic)
+      } else {
+        loaded = loadBlueprintFile(args.schematic)
+        if (!loaded.ok) {
+          const s = await loadSchematicFile(args.schematic)
+          if (s.ok) loaded = { ok: true, blueprint: s.schematic }
+        }
+      }
       if (!loaded.ok) { ctx.reply(loaded.error); return loaded }
       let origin = null
       if (args.origin) {
@@ -600,6 +626,12 @@ async function executeCommand (raw, ctx) {
         }
       }
       return pilot.build(loaded.blueprint, origin)
+    }
+
+    case 'litematica': {
+      const loaded = await loadSchematicFile(args.file)
+      if (!loaded.ok) { ctx.reply(loaded.error); return loaded }
+      return pilot.build(loaded.schematic, null)
     }
 
     // ------------------------------------------------------ inventory
@@ -677,8 +709,11 @@ async function executeCommand (raw, ctx) {
     }
 
     case 'explorefilter': {
-      ctx.reply('explorefilter lands with the explore process phase — next push')
-      return { ok: false, error: 'not implemented yet' }
+      const r = loadExplorefilter(args.file, args.invert)
+      if (!r.ok) { ctx.reply(r.error); return r }
+      ctx.exploreFilter = r.filter
+      ctx.reply(`explore filter: ${r.count} chunks${args.invert ? ' (inverted)' : ''}`)
+      return { ok: true, filter: r }
     }
 
     case 'elytra': {

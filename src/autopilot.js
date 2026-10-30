@@ -559,11 +559,17 @@ class Autopilot extends EventEmitter {
 
   // plan toward a goal and drive there, the way goto does, but callable
   // from inside a process loop (the task label stays the process's).
+  // a stale plan must be able to splice + replan: mark the task active
+  // when called with no task set, or replan() would refuse to run.
   driveTo (goal) {
     const r = this.planNow(goal)
     if (r.status !== 'found' && r.status !== 'partial') return r
     this.goal = goal
     this.goalLabel = goal.label()
+    if (this.task === 'idle') {
+      this.task = 'goto'
+      this.emit('task')
+    }
     this.partial = r.status === 'partial'
     this.pathPointsCache = nodesToPoints(r.nodes)
     if (this.partial && !this.trackPartialEnd(r)) return { status: 'partial-stuck' }
