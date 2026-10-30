@@ -317,7 +317,7 @@ function parseCommand (raw) {
       return { ok: true, name, args: { player: rest[0] || null } }
     }
     case 'axis': {
-      let y = 120 // baritone axisHeight default
+      let y = null // unset: the axisHeight setting decides at execution time
       if (rest.length === 1) {
         const v = int(rest[0])
         if (v === null || v < -64 || v > 384) return fail('y must be an integer -64..384')

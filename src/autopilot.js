@@ -32,6 +32,7 @@ const { runBuilder } = require('./processes/builder')
 const { runFarm } = require('./processes/farm')
 const { runExplore } = require('./processes/explore')
 const { runMine } = require('./processes/mine')
+const { recordDig, backfillAfterTask } = require('./processes/backfill')
 
 const FOLLOW_REFRESH_MS = 1500
 const REPLAN_DEBOUNCE_MS = 400
@@ -80,6 +81,8 @@ class Autopilot extends EventEmitter {
     this.activeJob = 0
     this.activeProcessName = null
     this.executor = new Executor({ bot, view: this.view, settings: this.s, Vec3: deps.Vec3 })
+    // every hole the executor digs is remembered for the backfill process
+    this.executor.onDig = (x, y, z) => recordDig(this, x, y, z)
     this.wire()
     this.syncFromSettings()
   }
@@ -537,6 +540,7 @@ class Autopilot extends EventEmitter {
       this.goalLabel = ''
       this.pathPointsCache = []
       this.emit('task')
+      backfillAfterTask(this)
     }
     try {
       const out = await fn(() => this.activeJob === id && !this.paused)

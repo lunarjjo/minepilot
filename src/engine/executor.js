@@ -362,6 +362,8 @@ class Executor extends EventEmitter {
           done,
           new Promise((resolve, reject) => setTimeout(() => reject(new Error('dig timeout')), capMs))
         ])
+        // the backfill process wants to know about every hole we make
+        if (this.onDig) this.onDig(c.x, c.y, c.z)
       }
     } catch (e) {
       this.emit('log', `dig failed: ${String(e.message || e).slice(0, 80)}`)

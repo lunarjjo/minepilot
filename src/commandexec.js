@@ -290,7 +290,8 @@ async function dispatchCommand (name, args, ctx, refs) {
     }
 
     case 'axis': {
-      return pilot.axis(args.y)
+      const y = args.y === null ? settings.get('axisHeight') : args.y
+      return pilot.axis(y)
     }
 
     case 'surface': {

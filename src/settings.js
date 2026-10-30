@@ -273,6 +273,9 @@ function createDefaultSettings () {
   s.define('mineScanRadius', 'int', 64, 'how far the mine process searches loaded chunks for targets', 'mining', { min: 16, max: 128 })
   s.define('veinRadius', 'int', 1, 'after breaking one ore, also break directly adjacent ores of the same type', 'mining', { min: 0, max: 4 })
   s.define('blacklistClosestOnFailure', 'bool', true, 'a vein that cannot be reached gets blacklisted instead of retried forever', 'mining')
+  s.define('legitMine', 'bool', false, 'only mine blocks that are actually visible (an adjacent air pocket) — baritone legit mode', 'mining')
+  s.define('mineScanDroppedItems', 'bool', true, 'wait for mined drops to land in the inventory before moving on', 'mining')
+  s.define('backfill', 'bool', false, 'after digging through blocks, place throwaway blocks back to repair the tunnel (baritone backfill)', 'mining')
   s.define('throwawayItems', 'items', ['cobblestone', 'dirt', 'netherrack', 'andesite', 'diorite', 'granite', 'gravel', 'sand', 'dirt_path', 'stone', 'tuff', 'cobbled_deepslate', 'deepslate'], 'acceptable items to toss when the inventory is full and something valuable was just mined', 'mining')
 
   // ---- building --------------------------------------------------------
@@ -301,7 +304,9 @@ function createDefaultSettings () {
   s.define('lavaAvoidanceRadius', 'int', 2, 'horizontal distance kept from lava while pathing', 'pathing', { min: 0, max: 8 })
   s.define('enterPortal', 'bool', true, 'walking into a nether portal is a legal move', 'pathing')
   s.define('followRadius', 'int', 3, 'stand this close while following someone', 'pathing', { min: 1, max: 16 })
+  s.define('axisHeight', 'int', 120, 'the y level #axis heads for (baritone default 120)', 'pathing', { min: -64, max: 384 })
   s.define('exploreKeepLoadedUnloaded', 'bool', false, 'explore prefers targets at the edge of the loaded world (frontier bias)', 'pathing')
+  s.define('farmWaitForGrowth', 'bool', false, 'keep the farm process alive while nearby crops are still immature', 'pathing')
 
   // ---- rendering (the web map) -----------------------------------------
   s.define('renderPath', 'bool', true, 'draw the active path on the map', 'rendering')

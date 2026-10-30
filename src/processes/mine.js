@@ -34,6 +34,16 @@ function findNearest (pilot, names) {
   const radius = pilot.settings ? pilot.settings.get('mineScanRadius') : 64
   const sameColumn = (x, z) => OWN_COLUMN_EXEMPT && x === myX && z === myZ
 
+  // legitMine: only target blocks with an adjacent air pocket (visible),
+  // the way baritone's legit mode refuses to x-ray
+  const legitVisible = (x, y, z) => {
+    for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+      if (pilot.view.passable(x + dx, y + dy, z + dz)) return true
+    }
+    return false
+  }
+  const legit = pilot.settings ? pilot.settings.get('legitMine') : false
+
   if (typeof pilot.bot.findBlocks === 'function') {
     const ids = []
     const reg = pilot.bot.registry || null
@@ -49,6 +59,7 @@ function findNearest (pilot, names) {
       for (const f of found || []) {
         if (blacklist.has(f.x + ',' + f.y + ',' + f.z)) continue
         if (sameColumn(f.x, f.z)) continue
+        if (legit && !legitVisible(f.x, f.y, f.z)) continue
         const d = (f.x - p.x) ** 2 + (f.y - p.y) ** 2 + (f.z - p.z) ** 2
         if (d < bestD) { bestD = d; best = f }
       }
@@ -73,6 +84,7 @@ function findNearest (pilot, names) {
         if (sameColumn(x, z)) continue
         if (blacklist.has(x + ',' + y + ',' + z)) continue
         if (!wanted.has(pilot.view.name(x, y, z))) continue
+        if (legit && !legitVisible(x, y, z)) continue
         const d = dx * dx + dy * dy + dz * dz
         if (d < bestD) {
           bestD = d

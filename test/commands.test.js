@@ -134,7 +134,7 @@ test('commands: tunnel farm explore thisway axis surface', () => {
   r = parseCommand('thisway 1000')
   assert.strictEqual(r.args.distance, 1000)
   r = parseCommand('axis')
-  assert.strictEqual(r.args.y, 120)
+  assert.strictEqual(r.args.y, null, 'bare axis defers to the axisHeight setting')
   r = parseCommand('axis 90')
   assert.strictEqual(r.args.y, 90)
 })

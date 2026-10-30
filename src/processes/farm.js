@@ -8,6 +8,10 @@
 // like baritone, which harvests known ready crops and moves on.
 
 const { GoalNear } = require('../engine/goals')
+
+function sleep (ms) {
+  return new Promise((r) => setTimeout(r, ms))
+}
 const { findItem, equipForPlace } = require('../engine/place')
 
 const SCAN_BAND = 8 // crops live within a few blocks of walking height
@@ -114,6 +118,41 @@ async function runFarm (pilot, radius, alive, origin) {
     pilot.emit('progress', { index: harvested, total: crops.length })
   }
   pilot.emit('log', `harvested ${harvested} crops (replanted ${replanted})`)
+
+  // farmWaitForGrowth: stay on the farm while immature crops grow back
+  const waitForGrowth = pilot.settings ? pilot.settings.get('farmWaitForGrowth') : false
+  if (waitForGrowth && alive()) {
+    let rounds = 0
+    while (alive() && rounds < 24) {
+      await sleep(8000)
+      if (!alive()) break
+      const stillGrowing = scan(pilot, radius, center).length
+      if (stillGrowing === 0) {
+        // any immature crops of the known types nearby?
+        let immature = 0
+        const r2 = Math.max(2, Math.min(48, Math.floor(radius)))
+        const pp = center || pilot.pos()
+        if (pp) {
+          const cx = Math.floor(pp.x)
+          const cy = Math.floor(pp.y)
+          const cz = Math.floor(pp.z)
+          for (let dy = -SCAN_BAND; dy <= SCAN_BAND && immature === 0; dy++) {
+            for (let dx = -r2; dx <= r2 && immature === 0; dx++) {
+              for (let dz = -r2; dz <= r2 && immature === 0; dz++) {
+                const block = pilot.view.block(cx + dx, cy + dy, cz + dz)
+                if (block && CROPS[block.name]) immature++
+              }
+            }
+          }
+        }
+        if (immature === 0) break
+      }
+      rounds++
+      const again = await runFarm(pilot, radius, alive, center)
+      harvested += again.harvested || 0
+      replanted += again.replanted || 0
+    }
+  }
   return { harvested, replanted }
 }
 
