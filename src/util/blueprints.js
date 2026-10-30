@@ -130,3 +130,9 @@ function parseBlueprint (json) {
 }
 
 module.exports = { parseBlueprint, MAX_DIM, MAX_PLACEMENTS, CLEAR_CHARS }
+
+// load a blueprint json by name from ./blueprints or the bundled library.
+// thin alias over the blueprint store so the command executor only imports
+// this module.
+const { loadBlueprint } = require('./blueprintStore')
+module.exports.loadBlueprintFile = loadBlueprint
