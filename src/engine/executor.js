@@ -257,10 +257,12 @@ class Executor extends EventEmitter {
     if (horz <= ARRIVE_HORZ && vert <= ARRIVE_VERT && settled) return true
 
     // walked past the target: count consecutive worse distances and
-    // forgive the miss (physics rarely lands dead-center)
+    // forgive the miss (physics rarely lands dead-center; the engine goal
+    // is cell-exact but the process goals are radius-tolerant, so being
+    // within ~2 blocks of the last cell counts as arrival)
     if (horz > this.lastDist + 0.01) {
       this.worseTicks++
-      if (this.worseTicks > 8 && horz < 1.6 && vert <= ARRIVE_VERT) return true
+      if (this.worseTicks > 5 && horz < 2.2 && vert <= ARRIVE_VERT + 0.5) return true
     } else {
       this.worseTicks = 0
     }
