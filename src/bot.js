@@ -23,6 +23,7 @@ function createBotSession (opts, hooks) {
 
   const wantReconnect = () => (settings ? settings.get('reconnect') : true)
   const backoffCap = () => (settings ? settings.get('reconnectMaxDelayMs') : BACKOFF_MAX_MS)
+  let refusalHintShown = false
 
   function botOpts () {
     const o = {
@@ -66,6 +67,18 @@ function createBotSession (opts, hooks) {
 
     bot.on('error', (err) => {
       log(`connection error: ${String(err.message || err).slice(0, 80)}`)
+      // refused once means no server is there at all — say what to do
+      // about it instead of just backing off in silence. once per session:
+      // the hint stays true while the backoff retries.
+      if (err && err.code === 'ECONNREFUSED' && !refusalHintShown) {
+        refusalHintShown = true
+        const local = !opts.host || opts.host === '127.0.0.1' || opts.host === 'localhost'
+        log(`  nothing is listening at ${opts.host}:${opts.port} — npm start only connects, it does not boot a server.`)
+        if (local) {
+          log(`  want a local demo? ./run.sh demo downloads and starts a vanilla server, then joins it.`)
+        }
+        log(`  pointing at your server? MINEPILOT_HOST=<ip> MINEPILOT_PORT=<port> ./run.sh connect`)
+      }
     })
 
     bot.on('death', () => {
