@@ -19,6 +19,7 @@ const { createChatControl } = require('./chatcontrol')
 const { executeCommand } = require('./commandexec')
 const { MapView } = require('./mapview')
 const { createCockpitServer } = require('./server')
+const { createBrain } = require('./brain')
 const inventory = require('./inventory')
 const VERSION = require('../package.json').version
 
@@ -68,6 +69,13 @@ function main () {
     log(`web cockpit: http://127.0.0.1:${addr.port}`)
   }).catch((e) => log(`web cockpit failed to start: ${e.message}`))
 
+  // the full-auto survival brain — one instance for the whole session;
+  // it reads ctx.bot / ctx.pilot lazily so respawns just work
+  const brain = createBrain(ctx, { log })
+  ctx.brain = brain
+  brain.start(1200)
+  if (settings.get('autoSurvival')) brain.setEnabled(true)
+
   const session = createBotSession(config, {
     settings,
     log,
@@ -92,8 +100,10 @@ function main () {
       cockpit.wireBot(bot)
       startAutoEat(bot)
       startAutoDefend()
+      if (settings.get('autoSurvival') && !brain.status().on) brain.setEnabled(true)
       log(`minepilot ${VERSION} ready — type commands ("help") or chat "#help" in game`)
       log(`cockpit map: left click = goto, drag = selection, wheel = zoom`)
+      if (settings.get('autoSurvival')) log(`full-auto is ON (#auto off to stop)`)
     },
     onDeath (bot) {
       if (settings.get('deathWaypoints') && bot.entity && bot.entity.position) {
@@ -111,6 +121,7 @@ function main () {
       if (ctx.stations) {
         try { ctx.stations.reset() } catch (e) { /* ignore */ }
       }
+      try { brain.dispose() } catch (e) { /* ignore */ }
       if (chat) {
         try { chat.dispose() } catch (e) { /* ignore */ }
         chat = null

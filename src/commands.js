@@ -138,6 +138,7 @@ const COMMANDS = [
   { name: 'sleep', args: '', help: 'walk to the nearest bed and sleep', baritone: false },
   { name: 'wake', args: '', help: 'get out of the bed', baritone: false },
   { name: 'activate', args: '<block>', help: 'right-click the nearest block of a type (lever, door...)', baritone: false },
+  { name: 'auto', args: '[on | off | status]', help: 'the full-auto survival brain: reflexes, needs, goals', baritone: false },
   { name: 'inventory', args: '[hand | armor]', help: 'list what the bot carries', baritone: false },
   { name: 'status', args: '', help: 'full status readout', baritone: false },
   { name: 'spawn', args: '', help: 'walk back to world spawn', baritone: false }
@@ -550,6 +551,13 @@ function parseCommand (raw) {
     case 'wake': {
       if (rest.length !== 0) return fail(`${name} takes no arguments`)
       return { ok: true, name, args: {} }
+    }
+    case 'auto': {
+      if (rest.length === 0) return { ok: true, name, args: { mode: 'toggle' } }
+      if (rest.length !== 1 || !['on', 'off', 'status'].includes(rest[0].toLowerCase())) {
+        return fail('usage: auto [on | off | status]')
+      }
+      return { ok: true, name, args: { mode: rest[0].toLowerCase() } }
     }
     case 'flee': {
       let radius = 32

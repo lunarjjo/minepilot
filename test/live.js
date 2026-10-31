@@ -414,11 +414,36 @@ async function main () {
       await sleep(1000)
     }
 
-    // 16. the in-game command grammar through the chat path
+    // 16. full-auto: the survival brain takes the bot from logs to dinner
+    await post('/api/command', { command: 'say /clear' })
+    await until(async () => (await get('/api/inventory')).body.items.length === 0, 20000, 'the clear').catch(() => null)
+    await give('oak_log', 16)
+    await until(async () => (await invCount('oak_log')) >= 16, 20000, 'logs').catch(() => null)
+    const autoOn = await post('/api/command', { command: 'auto on' })
+    check('auto on accepted', autoOn.body.result.ok === true, autoOn.body.lines.join(' | '))
+    const autoState = await until(async () => {
+      const r = await get('/api/status')
+      return r.body.task && r.body.task.task !== 'idle' ? r.body : null
+    }, 60000, 'the brain to start working').catch(() => null)
+    check('the brain takes over without commands', !!autoState, autoState ? autoState.task.task : 'never started')
+    await until(async () => (await invCount('wooden_pickaxe')) >= 1, 240000, 'the wooden pickaxe').catch(() => null)
+    check('full-auto: logs -> planks -> table -> wooden pickaxe', (await invCount('wooden_pickaxe')) >= 1,
+      'inv: ' + JSON.stringify((await get('/api/inventory')).body.items.map((i) => i.name + 'x' + i.count)))
+    // stock the furnace phase: cobble + coal + raw meat, then let it cook
+    await give('cobblestone', 20)
+    await give('coal', 4)
+    await give('raw_beef', 3)
+    await until(async () => (await invCount('cooked_beef')) >= 1, 300000, 'the cooked beef').catch(() => null)
+    check('full-auto: crafts a furnace and cooks raw beef', (await invCount('cooked_beef')) >= 1,
+      'inv: ' + JSON.stringify((await get('/api/inventory')).body.items.map((i) => i.name + 'x' + i.count)).slice(0, 200))
+    const autoOff = await post('/api/command', { command: 'auto off' })
+    check('auto off accepted', autoOff.body.result.ok === true)
+
+    // 17. the in-game command grammar through the chat path
     const chatCmd = await post('/api/command', { command: 'say hello from minepilot' })
     check('say works', chatCmd.body.result.ok === true)
 
-    // 17. clean shutdown
+    // 18. clean shutdown
     ws.close()
   } finally {
     child.kill('SIGINT')

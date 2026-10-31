@@ -568,9 +568,21 @@ function renderHud () {
   $('hud-food').innerHTML = `<span class="on">${food}</span>`
   if (st.node) $('hud-pos').textContent = `${st.node.x} ${st.node.y} ${st.node.z}`
   const task = st.task || {}
-  $('hud-task').innerHTML = `<b>${esc(task.paused ? 'paused' : (task.task || 'idle'))}</b>${task.goal ? ' · ' + esc(task.goal) : ''}`
+  const autoTag = st.auto && st.auto.on ? ` · auto: ${st.auto.activity}` : ''
+  $('hud-task').innerHTML = `<b>${esc(task.paused ? 'paused' : (task.task || 'idle'))}</b>${task.goal ? ' · ' + esc(task.goal) : ''}${esc(autoTag)}`
   $('hud-eta').textContent = st.eta && !st.eta.arrived ? `${st.eta.blocks} blocks · ~${st.eta.seconds}s` : (st.eta && st.eta.arrived ? 'at goal' : '')
   $('hud-held').innerHTML = st.held ? `hand: <b>${esc(st.held)}</b>` : ''
+  const ab = $('hud-auto')
+  const on = !!(st.auto && st.auto.on)
+  ab.textContent = on ? `auto: ${st.auto.activity}` : 'auto: off'
+  ab.className = 'auto ' + (on ? 'on' : 'off')
+  ab.title = on ? `full-auto — ${st.auto.reason}` : 'the full-auto survival brain'
+}
+
+// the full-auto toggle drives the same `auto` command as the console
+$('hud-auto').onclick = () => {
+  const on = !!(S.state && S.state.auto && S.state.auto.on)
+  send({ t: 'command', text: on ? 'auto off' : 'auto on' })
 }
 
 function renderEntities () {

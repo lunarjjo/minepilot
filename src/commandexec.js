@@ -84,6 +84,11 @@ async function executeCommand (raw, ctx) {
   // the two so every input path (chat, console, map, rest) hears the same
   // answer. run the dispatch through an inner reply-capturing context.
   const { name, args } = parsed
+  // a human took the controls: the survival brain's goals stand down for
+  // the hold window (reflexes keep running — safety is never suspended)
+  if (ctx.brain && name !== 'auto' && ctx.source !== 'brain') {
+    try { ctx.brain.noteUserCommand() } catch (e) { /* ignore */ }
+  }
   const { pilot, bot, settings, selection, waypoints } = ctx
   const node = () => pilot.node() || { x: 0, y: 64, z: 0 }
   let replies = 0
@@ -767,6 +772,19 @@ async function dispatchCommand (name, args, ctx, refs) {
       if (name === 'sleep') return inter.sleepInBed(ctx)
       if (name === 'wake') return inter.wakeUp(ctx)
       return inter.activateBlock(ctx, args.block)
+    }
+
+    case 'auto': {
+      if (!ctx.brain) return { ok: false, error: 'the brain is not available in this session' }
+      const st = ctx.brain.status()
+      if (args.mode === 'status') {
+        reply(`full-auto: ${st.on ? 'ON' : 'off'} — ${st.activity}${st.reason ? ' (' + st.reason + ')' : ''}`)
+        return { ok: true, status: st }
+      }
+      const want = args.mode === 'toggle' ? !st.on : args.mode === 'on'
+      settings.set('autoSurvival', want)
+      ctx.brain.setEnabled(want)
+      return { ok: true, reply: `full-auto ${want ? 'ON' : 'off'}` }
     }
 
     case 'litematica': {

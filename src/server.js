@@ -332,6 +332,7 @@ function createCockpitServer (ctx) {
     const node = ctx.pilot.node()
     const e = ctx.bot.entity
     const eta = ctx.pilot.eta()
+    const brain = ctx.brain ? ctx.brain.status() : null
     broadcast({
       t: 'state',
       pos: e && e.position ? [e.position.x, e.position.y, e.position.z] : null,
@@ -342,7 +343,8 @@ function createCockpitServer (ctx) {
       task: ctx.pilot.info(),
       eta: eta.ok ? { blocks: eta.blocks, seconds: eta.seconds, arrived: eta.arrived } : null,
       held: ctx.bot.heldItem ? ctx.bot.heldItem.name : null,
-      paused: ctx.pilot.paused
+      paused: ctx.pilot.paused,
+      auto: brain ? { on: brain.on, activity: brain.activity, reason: brain.reason } : null
     })
   }
 

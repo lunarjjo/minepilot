@@ -383,3 +383,22 @@ input:focus { outline: 1px solid var(--accent); }
 .st-progress .tiny { font-size: 10px; color: var(--dim); }
 
 .tiny { font-size: 10px; color: var(--dim); }
+
+/* ------------------------------------------------------------ auto toggle */
+#hud-auto {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--dim);
+  border-radius: 999px;
+  padding: 3px 12px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+#hud-auto.on {
+  color: var(--good);
+  border-color: var(--good);
+  background: rgba(98, 216, 136, 0.08);
+}
+#hud-auto.off:hover { color: var(--text); }

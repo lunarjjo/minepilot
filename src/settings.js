@@ -32,6 +32,7 @@ const CATEGORIES = {
   rendering: 'what the web map draws',
   chat: 'in-game chat control',
   elytra: 'elytra flight',
+  brain: 'the full-auto survival brain',
   minepilot: 'minepilot-only extras'
 }
 
@@ -339,6 +340,11 @@ function createDefaultSettings () {
   s.define('bedWaypoints', 'bool', true, 'save a waypoint when sleeping in a bed', 'minepilot')
   s.define('logVerbosity', 'string', 'info', 'console log level: debug | info | warn | error', 'minepilot')
   s.define('mapChunkRadius', 'int', 16, 'chunk radius streamed to the web map around the bot', 'minepilot', { min: 2, max: 32 })
+
+  // ---- full-auto survival brain ---------------------------------------
+  s.define('autoSurvival', 'bool', false, 'the full-auto brain: reflexes, needs and goals without commands (#auto)', 'brain')
+  s.define('autoExplore', 'bool', true, 'when the brain has nothing pressing, scout unseen chunks', 'brain')
+  s.define('autoHunt', 'bool', true, 'the brain may hunt animals when it runs out of food', 'brain')
 
   return s
 }

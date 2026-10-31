@@ -16,6 +16,23 @@ const { NON_SOLID, CLIMBABLE } = require('../../src/engine/world')
 
 const AIR_LIKE = new Set(['air', 'cave_air', 'void_air', 'light'])
 
+// what a block drops when dug by hand (the common survival chain)
+const DROPS = {
+  stone: 'cobblestone',
+  grass_block: 'dirt',
+  coal_ore: 'coal',
+  deepslate_coal_ore: 'coal',
+  iron_ore: 'raw_iron',
+  deepslate_iron_ore: 'raw_iron',
+  cobblestone: 'cobblestone',
+  cobbled_deepslate: 'cobbled_deepslate',
+  dirt: 'dirt',
+  oak_log: 'oak_log',
+  birch_log: 'birch_log',
+  spruce_log: 'spruce_log',
+  oak_planks: 'oak_planks'
+}
+
 function defaultBox (name) {
   if (AIR_LIKE.has(name)) return 'empty'
   if (NON_SOLID.has(name)) return 'empty'
@@ -226,7 +243,10 @@ class FakeBot extends EventEmitter {
     this.version = '1.21.4'
     this.chats = []
     this.quitCalled = false
-    this.inventory = { items: () => [] }
+    // one persistent backing array — items() must return the SAME list or
+    // dig drops (addStack) vanish into a fresh empty array each call
+    this.invItems = []
+    this.inventory = { items: () => this.invItems }
     this.heldItem = null
     this.equips = []
     this.controls = { forward: false, back: false, left: false, right: false, jump: false, sprint: false, sneak: false }
@@ -247,6 +267,7 @@ class FakeBot extends EventEmitter {
   chat (msg) { this.chats.push(msg) }
 
   setInventory (items) {
+    this.invItems = items
     this.inventory.items = () => items
   }
 
@@ -266,6 +287,18 @@ class FakeBot extends EventEmitter {
   async equip (item) {
     this.equips.push(item ? item.name : null)
     this.heldItem = item
+    return true
+  }
+
+  // eating: consume one unit of the held item, like a server does
+  async consume () {
+    if (!this.heldItem) throw new Error('nothing to eat')
+    const items = this.inventory.items()
+    const stack = items.find((it) => it.name === this.heldItem.name)
+    if (!stack) throw new Error('the held item is gone')
+    stack.count -= 1
+    if (stack.count <= 0) this.removeStack(stack)
+    this.food = Math.min(20, (this.food || 0) + 6)
     return true
   }
 
@@ -321,6 +354,10 @@ class FakeBot extends EventEmitter {
     this.digs.push(block.name)
     await new Promise((r) => setTimeout(r, 60))
     this.world.removeBlock(block.position.x, block.position.y, block.position.z)
+    // vanilla drop rules (the approximation the survival brain climbs):
+    // stone -> cobblestone, ores -> their material, grass -> dirt
+    const drop = DROPS[block.name]
+    if (drop) this.addStack({ name: drop, count: 1, slot: -1, type: (this.registry.itemsByName[drop] || {}).id || -1 })
   }
 
   async placeBlock (ref, face) {
@@ -412,6 +449,61 @@ class FakeBot extends EventEmitter {
       throw new Error('fake transfer only handles furnace slots 0-2')
     }
     return w.takeSlot(roles[slot])
+  }
+
+  // ---- crafting (mirrors mineflayer's recipesFor + craft) ------------
+
+  // mineflayer's exact signature: (itemType, metadata, minResultCount,
+  // craftingTable) — and its exact gate: 3x3 recipes only pass when an open
+  // table window is supplied (the trap that made pickaxes uncraftable live
+  // while the offline fake happily crafted them)
+  recipesFor (itemId, metadata, minResultCount, craftingTable) {
+    const { ingredientCountsFromRecipe, requiresTableFromRecipe } = require('../../src/util/recipeindex')
+    const min = minResultCount || 1
+    const recipes = (this.registry.recipes || {})[itemId] || []
+    const items = this.inventory.items()
+    const out = []
+    for (const recipe of recipes) {
+      const result = recipe.result || {}
+      if (!(result.count > 0)) continue
+      const requiresTable = requiresTableFromRecipe(recipe)
+      if (requiresTable && !craftingTable) continue
+      const counts = ingredientCountsFromRecipe(recipe)
+      const craftCount = Math.ceil(min / result.count)
+      let ok = true
+      for (const [id, need] of counts) {
+        const have = items.filter((it) => it.type === id).reduce((a, it) => a + (it.count || 1), 0)
+        if (have < need * craftCount) { ok = false; break }
+      }
+      if (!ok) continue
+      out.push({ ...recipe, requiresTable })
+    }
+    return out
+  }
+
+  async craft (recipe, count, table) {
+    if (recipe.requiresTable && !table) throw new Error('crafting table needed')
+    const { ingredientCountsFromRecipe } = require('../../src/util/recipeindex')
+    const n = count || 1
+    for (let i = 0; i < n; i++) {
+      const counts = ingredientCountsFromRecipe(recipe)
+      for (const [id, need] of counts) {
+        const items = this.inventory.items()
+        let left = need
+        while (left > 0) {
+          const stack = items.find((it) => it.type === id && it.count > 0)
+          if (!stack) throw new Error(`missing ingredient id ${id}`)
+          const take = Math.min(stack.count, left)
+          stack.count -= take
+          left -= take
+          if (stack.count <= 0) this.removeStack(stack)
+        }
+      }
+      const result = recipe.result
+      const meta = this.registry.itemsArray.find((x) => x.id === result.id)
+      this.addStack({ name: meta ? meta.name : `id_${result.id}`, count: result.count, type: result.id })
+    }
+    return true
   }
 
   // ---- entity + block interactions ---------------------------------
