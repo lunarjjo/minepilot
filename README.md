@@ -1,6 +1,6 @@
 # minepilot
 
-**Fly one mineflayer bot with full baritone-style control — an interactive 2D map, a complete command grammar, and every process baritone has, in one lightweight web cockpit.**
+**Fly one mineflayer bot with full baritone-style control — an interactive 2D map, a complete command grammar, every process baritone has, workstation windows in the cockpit, and a full-auto survival brain that plays like nobody's at the keyboard.**
 
 ![ci](https://github.com/lunarjjo/minepilot/actions/workflows/ci.yml/badge.svg)
 ![license](https://img.shields.io/badge/license-MIT-8b5dff)
@@ -18,6 +18,10 @@ goals and processes: mine with vein handling, build from schematics, farm,
 explore, tunnel, elytra glide, waypoints, selections, backfill — the
 works. The full parity ledger lives in
 [docs/baritone-parity.md](docs/baritone-parity.md).
+
+and when you want the bot to just play: flip `#auto on` and the survival
+brain takes over — reflexes, needs and goals, from punching the first
+tree to cooking dinner in a furnace it crafted itself.
 
 ## quickstart
 
@@ -40,6 +44,9 @@ MINEPILOT_HOST=your.server MINEPILOT_PORT=25565 ./run.sh connect
 MINEPILOT_HOST=127.0.0.1 MINEPILOT_VERSION=1.21.8 npm start
 ```
 
+for the full-auto experience on the demo server, type `auto on` in the
+console (or click the auto pill in the hud) and watch the log.
+
 the console is vanilla JS with no build step — node >= 20, curl, and (for
 demo mode) java are the only requirements.
 
@@ -59,6 +66,15 @@ demo mode) java are the only requirements.
   item; nearby entities; waypoints by tag (home / death / user); the
   inventory grid with equip / drop / craft actions; and a searchable
   settings editor covering every engine knob.
+- **the craft tab** — every recipe in the registry, browsable and
+  searchable, each entry showing the variant closest to the current
+  inventory with have/need counts and a one-click craft (which still
+  walks to a table when the recipe needs one — one crafting path, not
+  two).
+- **the station tab** — chest windows (grid + deposit / withdraw /
+  transfer-all), furnace windows (input / fuel / output slots with live
+  smelt + burn bars) and villager trade lists, driven from the ui. the
+  bot walks into reach and opens the window itself.
 - **the console** — the exact same command grammar as in-game chat
   (baritone's `#` prefix), with history. chat from the game streams into
   the feed; bot replies stream back to the game.
@@ -78,16 +94,40 @@ farm 48 / farm 48 basecamp  harvest + replant around here or a waypoint
 explore 1000             roam toward the closest unseen chunk
 follow players / follow entity pig   track players or mobs
 attack zombie / flee     hunt or run
+feed cow wheat / breed cow   feed and breed animals
+sleep / wake / activate lever   right-click the world
 elytra 500 1200          glide there (firework boosts when carried)
 sel fill dirt / sel sphere glass 4   selection shape tools
 wp save user base / wp goal base     waypoints with tags
 set allowBreak false     tune any setting live
+auto on                  full-auto: the survival brain takes over
 eta / proc / pause / resume / stop   state and lifecycle
-help                     the full list (40+ commands)
+help                     the full list (60+ commands)
 ```
 
 in-game, prefix with `#` (`#goto 100 -200`, `#mine 16 iron_ore`) — or
 whisper. `#come` walks to whoever asked.
+
+## full-auto
+
+`auto on` (or the hud pill, or the `autoSurvival` setting) hands the bot
+to a survival brain layered like a player's instincts:
+
+- **reflexes** — never suspended, not even while you hold the controls:
+  flee creepers, fight or flee hostiles depending on health, eat when
+  hurt or hungry.
+- **needs** — the whole tool ladder from nothing: logs to planks to a
+crafting table to a wooden pick, cobble to stone tools, a furnace
+(crafted and placed by the bot itself) to smelt iron and cook meat, an
+iron sword, armor pieces worn the moment they exist, torches. the food
+  pipeline hunts animals and cooks the raw drops. wood never runs out.
+- **goals** — with nothing pressing, the bot scouts unseen chunks.
+
+the brain drives the same engine you drive — the autopilot, the
+processes, the craft path — never a private lane. any command from you
+suspends its goals for a hold window; the reflexes stay on for safety.
+a decision that goes nowhere gets a 90-second cooldown, so the loop
+cannot spin. `auto off` hands it back.
 
 ## architecture
 
@@ -100,10 +140,14 @@ src/
                tunnel, excavate, gotoblock, elytra, backfill
   commands.js  the full baritone grammar (pure parser, fully tested)
   commandexec.js one dispatcher for chat, console, map and REST
-  inventory.js drop/eat/craft/chest/throwaway policies
+  brain.js     the full-auto survival brain: reflexes, needs, goals
+  stations.js  workstation windows: chest, furnace, villager, table
+  interactions.js feed, breed, sleep, wake, activate
+  inventory.js drop/eat/craft/chest/throwaway policies + the
+               verified per-iteration craft loop
   selection.js cuboid selections, shapes, clipboard, undo
   waypoints.js tagged waypoints with persistence
-  settings.js  ~80 typed settings across 10 categories
+  settings.js  ~90 typed settings across 11 categories
   mapview.js   chunk scanning + viewport streaming for the map
   server.js    http + ws cockpit (REST + live protocol)
   web/         the console — vanilla JS, no build step
@@ -132,15 +176,17 @@ ships a version natively, the vendored copy is skipped entirely.
 ## testing
 
 ```bash
-npm test          # 126 offline tests: engine, grammar, processes, cockpit
+npm test          # 151 offline tests: engine, grammar, processes, cockpit, brain
 npm run test:live # live e2e against a running vanilla server
 ```
 
 the offline suite runs the whole stack against a kinematic fake bot —
-the same decisions the real bot makes, at unit-test speed. the live suite
-boots real vanilla servers in CI (26.3, 26.2, 1.21.8) and drives the bot
-through goto, mine, waypoints, pause/resume, excavate, tunnel and a full
-gather-and-build cycle.
+the same decisions the real bot makes, at unit-test speed (the brain's
+full tool ladder included). the live suite boots real vanilla servers
+in CI (26.3, 26.2, 1.21.8) and drives the bot through goto, mine,
+waypoints, pause/resume, excavate, tunnel, a full gather-and-build
+cycle, workstation windows, animal breeding, sleeping, and a start
+from zero inventory to a furnace-cooked dinner under full-auto.
 
 ## known issues
 
@@ -151,6 +197,9 @@ gather-and-build cycle.
   the setting. botfleet shipped pillar opt-in for the same reason.
 - **elytra** is a glide controller (see the parity doc), not a trajectory
   search.
+- the full-auto brain is a survival generalist, not a speedrunner: it
+  plays safely (flee thresholds, wood margins) and its progression is
+  gated by what the world actually offers nearby.
 
 ## license
 

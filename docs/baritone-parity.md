@@ -103,7 +103,10 @@ notable deltas:
 - minepilot extras: `mapChunkRadius`, `reconnect*`, `autoEat*`,
   `mineScanRadius`, `veinRadius`, `stuckTimeoutMs`, `logVerbosity`,
   `allowPillar` (opt-in: a headless client cannot verify its own pillar
-  placement acks — bridge stays on, pillar does not, see the readme).
+  placement acks — bridge stays on, pillar does not, see the readme),
+  `autoSurvival` / `autoExplore` / `autoHunt` (the full-auto brain —
+  baritone has no autonomous-survival equivalent; `#auto on` is the
+  minepilot extension).
 
 settings that cannot exist headless (documented, not silently dropped):
 rendering-thread knobs (`renderPathIgnoreDepth`, line widths — the cockpit

@@ -1,5 +1,52 @@
 # changelog
 
+## 0.2.0 — workstations, world interactions and the full-auto brain
+
+the cockpit stops being a command line with a map. three layers landed,
+each live-verified against real vanilla servers:
+
+- **workstation windows** (the station + craft tabs): every recipe in
+  the registry browsable and one-click craftable (have/need counts,
+  table-walking included); chest windows with deposit / withdraw /
+  transfer-all; furnace windows with live smelt + burn bars and slot
+  control; villager trade lists with repeatable trades. the bot walks
+  into reach and opens each window itself.
+- **world interactions**: `feed <entity> [item]` and `breed <entity>`
+  (a vanilla breeding-food table for 24 mobs), `sleep` / `wake` (find a
+  bed, walk, sleep at night), `activate <block>` (levers, doors,
+  buttons, trapdoors), all wired into the entity menus too.
+- **the full-auto survival brain**: `auto on` and the bot plays —
+  reflexes (flee creepers, fight or flee by health, emergency eating),
+  needs (the whole tool ladder from punching the first tree to iron
+  tools and worn armor, hunting and furnace-cooking its own food,
+  torches, wood margins) and goals (scouting unseen chunks). it drives
+  the same engine a human driver does, stands down for a hold window
+  when a human commands, and cools off decisions that go nowhere.
+
+the launch-day craft flake got its autopsy — three real bugs:
+
+- mineflayer 4.39 removed `bot.openCraftingTable`; the silent typeof
+  guard made every 3x3 recipe "unrecipeable". the table block now feeds
+  `recipesFor` directly (any truthy 4th argument opens the 3x3 gate).
+- multi-craft fires every click back-to-back and a busy server drops
+  transactions — 8 crafts could land 6. crafts now run one verified
+  iteration at a time with window-state resets between losses.
+- a dropped craft strands materials in the 2x2 grid (invisible to
+  `items()`), poisoning later crafts and even re-shaping a leftover
+  plank into an oak_button. the grid is cleared before every craft and
+  after every miss.
+
+also: smelting waits for the whole stack instead of stranding the rest
+in the furnace; the brain crafts and places its own furnace before
+cooking; taboo cooldowns are keyed per kind+target; `autoSurvival` /
+`autoExplore` / `autoHunt` settings; an auto pill in the cockpit hud.
+
+verified: 151 offline tests (9 new brain tables + interactions +
+stations); live e2e 58/58 on a real vanilla 1.21.8 server — zero
+inventory to a wooden pickaxe to a furnace-cooked dinner under full-auto,
+real chest/furnace/trade windows, fed and bred cows, a flipped lever and
+a slept-in bed.
+
 ## 0.1.0 — the full-control cockpit
 
 - engine: A* pathfinder over standing positions with the full movement
