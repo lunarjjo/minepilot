@@ -108,6 +108,9 @@ function main () {
         pilot = null
         ctx.pilot = null
       }
+      if (ctx.stations) {
+        try { ctx.stations.reset() } catch (e) { /* ignore */ }
+      }
       if (chat) {
         try { chat.dispose() } catch (e) { /* ignore */ }
         chat = null

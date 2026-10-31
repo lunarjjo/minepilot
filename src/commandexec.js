@@ -561,7 +561,12 @@ async function dispatchCommand (name, args, ctx, refs) {
                   ? selection.sphereBlueprint(args.block, args.radius, args.hollow)
                   : selection.cylinderBlueprint(args.block, args.radius, args.height, args.hollow)
           if (!r.ok) { reply(r.error); return r }
-          pilot.build(r.blueprint, null)
+          // shape blueprints carry ABSOLUTE world cells (unlike `copy`, which
+          // stores relative ones) — build them against a zero origin, never
+          // the bot's feet: origin + absolute doubled every coordinate (the
+          // chest landed at 2x and the build died as "beyond the loaded
+          // world" — found by the live station e2e)
+          pilot.build(r.blueprint, { x: 0, y: 0, z: 0 })
           reply(`building ${args.action} ${args.block} (${r.blueprint.placements.length} cells)`)
           return { ok: true }
         }

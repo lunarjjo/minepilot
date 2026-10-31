@@ -34,6 +34,8 @@
         <button data-tab="entities" class="active">nearby</button>
         <button data-tab="waypoints">waypoints</button>
         <button data-tab="inventory">inventory</button>
+        <button data-tab="craft">craft</button>
+        <button data-tab="station">station</button>
         <button data-tab="settings">settings</button>
       </div>
       <div class="tab-body" id="tab-entities">
@@ -47,6 +49,22 @@
         <div class="row">
           <input id="inv-filter" placeholder="filter items…">
         </div>
+      </div>
+      <div class="tab-body hidden" id="tab-craft">
+        <div class="row">
+          <input id="recipe-search" placeholder="search recipes… (try: pickaxe, torch, chest)">
+        </div>
+        <div class="row tiny" id="craft-note"></div>
+        <div id="recipe-list" class="list"></div>
+      </div>
+      <div class="tab-body hidden" id="tab-station">
+        <div class="row" id="station-buttons">
+          <button id="st-open-chest">open chest</button>
+          <button id="st-open-furnace">open furnace</button>
+          <button id="st-open-table">open table</button>
+          <button id="st-close" class="muted">close</button>
+        </div>
+        <div id="station-body"></div>
       </div>
       <div class="tab-body hidden" id="tab-settings">
         <input id="settings-search" placeholder="search settings…">

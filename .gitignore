@@ -5,6 +5,8 @@ npm-install.log
 .env
 server/
 server-normal/
+server-e2e-gui/
+server-*/
 paper-*.jar
 eula.txt
 mcserver/

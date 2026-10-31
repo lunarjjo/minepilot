@@ -20,6 +20,8 @@ const { WebSocketServer } = require('ws')
 const { executeCommand } = require('./commandexec')
 const inventory = require('./inventory')
 const { hostileName } = require('./commandexec')
+const { createStationManager } = require('./stations')
+const { buildRecipeIndex, listRecipes } = require('./util/recipeindex')
 
 const STATIC_DIR = path.join(__dirname, 'web')
 const MIME = {
@@ -60,6 +62,27 @@ function createCockpitServer (ctx) {
   const mapview = () => ctx.mapview
   const state = { startedAt: Date.now() }
   const clients = new Set()
+
+  // one open workstation (chest / furnace / villager) driven from the ui.
+  // lives here because it broadcasts frames; reset from index.js on
+  // respawn/disconnect via ctx.stations.reset()
+  const stations = createStationManager(ctx, (obj) => broadcast(obj), (t) => broadcast({ t: 'log', text: t }))
+  ctx.stations = stations
+
+  // the recipe index is per minecraft version (registry data); rebuilt
+  // lazily whenever the bot (re)spawns onto a different one
+  let recipeIndex = null
+  let recipeVersion = null
+  function recipes () {
+    const bot = ctx.bot
+    const v = bot && bot.registry ? (bot.version || 'unknown') : null
+    if (!v) return []
+    if (!recipeIndex || recipeVersion !== v) {
+      recipeIndex = buildRecipeIndex(bot.registry)
+      recipeVersion = v
+    }
+    return recipeIndex
+  }
 
   const app = http.createServer(async (req, res) => {
     const url = (req.url || '/').split('?')[0]
@@ -129,7 +152,24 @@ function createCockpitServer (ctx) {
         return sendJson(res, 200, { waypoints: waypoints.list() })
       }
       if (url === '/api/inventory' && req.method === 'GET') {
-        return sendJson(res, 200, { items: inventory.items(ctx.bot || {}).map((it) => ({ name: it.name, count: it.count, slot: it.slot })) })
+        // live view: through an open station window when there is one
+        // (bot.inventory is frozen while a container window is open)
+        const items = ctx.stations ? ctx.stations.botItems() : inventory.items(ctx.bot || {})
+        return sendJson(res, 200, { items: items.map((it) => ({ name: it.name, count: it.count, slot: it.slot })) })
+      }
+      if (url === '/api/recipes' && req.method === 'GET') {
+        const q = (req.url.match(/[?&]q=([^&]*)/) || [])[1] || ''
+        const craftableFirst = /[?&]craftableFirst=1/.test(req.url || '')
+        const items = ctx.stations ? ctx.stations.botItems() : inventory.items(ctx.bot || {})
+        return sendJson(res, 200, { recipes: listRecipes(recipes(), items, decodeURIComponent(q), { craftableFirst, limit: 400 }), total: recipes().length })
+      }
+      if (url === '/api/station' && req.method === 'GET') {
+        return sendJson(res, 200, stations.frame())
+      }
+      if (url === '/api/station' && req.method === 'POST') {
+        const body = await readBody(req)
+        const r = await stations.action(body)
+        return sendJson(res, r.ok ? 200 : 400, r)
       }
       if (url === '/api/command' && req.method === 'POST') {
         const body = await readBody(req)
@@ -176,13 +216,17 @@ function createCockpitServer (ctx) {
         try { ws.send(JSON.stringify({ t: 'log', text: 'message is not JSON' })) } catch (e2) { /* closing */ }
         return
       }
-      handleMessage(ws, msg)
+      // async: station open/action await window operations; the station
+      // manager's busy flag serializes concurrent clicks
+      handleMessage(ws, msg).catch((e) => {
+        broadcast({ t: 'log', text: `error: ${String(e.message || e).slice(0, 80)}` })
+      })
     })
     ws.on('close', () => clients.delete(ws))
     ws.on('error', () => {})
   })
 
-  function handleMessage (ws, msg) {
+  async function handleMessage (ws, msg) {
     const t = msg && msg.t
     switch (t) {
       case 'ping':
@@ -244,6 +288,27 @@ function createCockpitServer (ctx) {
       }
       case 'inventory:drop': {
         inventory.drop(ctx.bot, { mode: 'item', item: msg.name }).catch(() => {})
+        break
+      }
+      case 'recipes:get': {
+        const items = ctx.stations ? ctx.stations.botItems() : inventory.items(ctx.bot || {})
+        const out = listRecipes(recipes(), items, msg.q, { craftableFirst: msg.craftableFirst !== false, limit: msg.limit || 200 })
+        try { ws.send(JSON.stringify({ t: 'recipes', recipes: out, total: recipes().length })) } catch (e) { /* closing */ }
+        break
+      }
+      case 'station:open': {
+        if (!msg.kind) return
+        const pos = Number.isFinite(msg.x) && Number.isFinite(msg.y) && Number.isFinite(msg.z)
+          ? { x: Math.floor(msg.x), y: Math.floor(msg.y), z: Math.floor(msg.z) }
+          : null
+        const r = await stations.open(String(msg.kind), pos, Number.isFinite(msg.entityId) ? msg.entityId : null)
+        if (!r.ok) broadcast({ t: 'log', text: r.error })
+        break
+      }
+      case 'station:action': {
+        const r = await stations.action(msg)
+        if (r && r.reply) broadcast({ t: 'chat', from: 'minepilot', text: r.reply })
+        if (r && !r.ok) broadcast({ t: 'log', text: r.error })
         break
       }
       case 'follow': {
@@ -315,9 +380,12 @@ function createCockpitServer (ctx) {
 
   function inventoryTick () {
     if (!ctx.bot) return
+    // same live-view rule as /api/inventory: a station window's player
+    // range is the truth while it is open
+    const items = ctx.stations ? ctx.stations.botItems() : inventory.items(ctx.bot)
     broadcast({
       t: 'inventory',
-      items: inventory.items(ctx.bot).map((it) => ({ name: it.name, count: it.count })),
+      items: items.map((it) => ({ name: it.name, count: it.count })),
       held: ctx.bot.heldItem ? ctx.bot.heldItem.name : null
     })
   }

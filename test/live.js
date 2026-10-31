@@ -222,11 +222,133 @@ async function main () {
     check('bot gathers materials and builds the blueprint', !!built, built ? built.text : 'no build-complete log across attempts')
     }
 
-    // 14. the in-game command grammar through the chat path
+    // 14. the workstation gui layer: recipes, crafting, chest + furnace
+    //    windows driven the way the cockpit drives them. /clear first —
+    //    leftovers from the gather checks make the craft assertions
+    //    nondeterministic (a full inventory refuses to craft)
+    const give = async (item, n) => post('/api/command', { command: `say /give ${BOT_NAME} ${item} ${n}` })
+    const invCount = async (name) => {
+      const r = await get('/api/inventory')
+      const it = r.body.items.find((i) => i.name === name)
+      return it ? it.count : 0
+    }
+    await post('/api/command', { command: 'say /clear' })
+    await until(async () => (await get('/api/inventory')).body.items.length === 0, 20000, 'the clear').catch(() => null)
+    await give('oak_log', 8)
+    await until(async () => (await invCount('oak_log')) >= 8, 20000, 'oak logs to arrive').catch(() => null)
+    check('op /give stocks the bot through the chat path', (await invCount('oak_log')) >= 8)
+
+    const rp = await get('/api/recipes?q=planks')
+    const planksEntry = rp.body.recipes.find((e) => e.name === 'oak_planks')
+    check('recipes api lists oak_planks as craftable from logs', planksEntry && planksEntry.craftable === true,
+      planksEntry ? JSON.stringify(planksEntry.ingredients) : 'not listed')
+
+    const cr = await post('/api/command', { command: 'craft oak_planks 8' })
+    check('craft command accepted', cr.body.result.ok === true, cr.body.lines.join(' | '))
+    await until(async () => (await invCount('oak_planks')) >= 8, 60000, 'the planks craft').catch(() => null)
+    check('bot crafts real planks from logs', (await invCount('oak_planks')) >= 8, `planks: ${await invCount('oak_planks')}`)
+
+    const rp2 = await get('/api/recipes?q=crafting_table')
+    const tableEntry = rp2.body.recipes.find((e) => e.name === 'crafting_table')
+    check('crafting_table flips to craftable once planks exist', tableEntry && tableEntry.craftable === true)
+
+    // a chest placed beside the bot on FRESH ground, driven through the
+    // station protocol. (placement needs a solid anchor face — the dig pit
+    // from the excavate check has none, so walk to untouched surface first,
+    // exactly what a player would do)
+    const fresh = await post('/api/command', { command: `goto ${(await get('/api/status')).body.position.x + 30} ${(await get('/api/status')).body.position.z + 6}` })
+    check('walk to fresh ground accepted', fresh.body.result.ok === true, fresh.body.lines.join(' | '))
+    await until(async () => {
+      const r = await get('/api/status')
+      return r.body.task.task === 'idle' ? 'done' : null
+    }, 120000, 'the walk to fresh ground').catch(() => null)
+    const pos1 = (await get('/api/status')).body.position
+    await give('chest', 1)
+    await until(async () => (await invCount('chest')) >= 1, 20000, 'the chest item').catch(() => null)
+    ws.send(JSON.stringify({ t: 'select', x0: pos1.x + 2, y0: pos1.y, z0: pos1.z, x1: pos1.x + 2, y1: pos1.y, z1: pos1.z }))
+    await sleep(400)
+    const fillChest = await post('/api/command', { command: 'sel fill chest' })
+    check('sel fill places the chest', fillChest.body.result.ok === true, fillChest.body.lines.join(' | '))
+    await until(async () => {
+      const r = await get('/api/status')
+      return r.body.task.task === 'idle' ? 'done' : null
+    }, 120000, 'the chest placement').catch(() => null)
+    await post('/api/command', { command: 'sel clear' })
+
+    ws.send(JSON.stringify({ t: 'station:open', kind: 'chest' }))
+    const chestFrame = await until(() => msgs.find((m) => m.t === 'station' && m.open && m.kind === 'chest'), 30000, 'the chest station frame')
+      .catch(() => null)
+    check('chest opens through the station protocol', !!chestFrame, chestFrame ? 'opened' : 'no frame')
+    if (chestFrame) {
+      const dep = await post('/api/station', { action: 'deposit', name: 'oak_planks', count: 8 })
+      check('deposit moves planks into the chest', dep.body.ok === true, JSON.stringify(dep.body))
+      const chestNow = await until(async () => {
+        const r = await get('/api/station')
+        const it = (r.body.items || []).find((i) => i.name === 'oak_planks')
+        return it && it.count >= 8 ? it : null
+      }, 20000, 'the chest frame to show the planks').catch(() => null)
+      check('chest frame shows the deposited stack', !!chestNow)
+      // the live inventory view (through the open window) drops by 8
+      const planksAfterDeposit = await invCount('oak_planks')
+      const wd = await post('/api/station', { action: 'withdraw', name: 'oak_planks', count: 4 })
+      check('withdraw pulls planks back', wd.body.ok === true, JSON.stringify(wd.body))
+      await until(async () => (await invCount('oak_planks')) > planksAfterDeposit, 20000, 'the withdraw').catch(() => null)
+      check('bot inventory reflects the withdrawal', (await invCount('oak_planks')) > planksAfterDeposit,
+        `stuck at ${await invCount('oak_planks')} after deposit left ${planksAfterDeposit}`)
+      await post('/api/station', { action: 'close' })
+    }
+
+    // a furnace: smelt a real log into charcoal with a real coal (logs were
+    // consumed by the planks craft — restock)
+    await give('oak_log', 4)
+    await until(async () => (await invCount('oak_log')) >= 1, 20000, 'logs restocked').catch(() => null)
+    const fresh2 = await post('/api/command', { command: `goto ${(await get('/api/status')).body.position.x - 30} ${(await get('/api/status')).body.position.z - 6}` })
+    await until(async () => {
+      const r = await get('/api/status')
+      return r.body.task.task === 'idle' ? 'done' : null
+    }, 120000, 'the walk to the furnace spot').catch(() => null)
+    const pos2 = (await get('/api/status')).body.position
+    await give('furnace', 1)
+    await give('coal', 4)
+    await until(async () => (await invCount('furnace')) >= 1 && (await invCount('coal')) >= 4, 20000, 'the furnace + coal').catch(() => null)
+    ws.send(JSON.stringify({ t: 'select', x0: pos2.x - 2, y0: pos2.y, z0: pos2.z, x1: pos2.x - 2, y1: pos2.y, z1: pos2.z }))
+    await sleep(400)
+    const fillFurnace = await post('/api/command', { command: 'sel fill furnace' })
+    check('sel fill places the furnace', fillFurnace.body.result.ok === true, fillFurnace.body.lines.join(' | '))
+    await until(async () => {
+      const r = await get('/api/status')
+      return r.body.task.task === 'idle' ? 'done' : null
+    }, 120000, 'the furnace placement').catch(() => null)
+    await post('/api/command', { command: 'sel clear' })
+
+    ws.send(JSON.stringify({ t: 'station:open', kind: 'furnace' }))
+    const furnaceFrame = await until(() => msgs.find((m) => m.t === 'station' && m.open && m.kind === 'furnace'), 30000, 'the furnace station frame')
+      .catch(() => null)
+    check('furnace opens through the station protocol', !!furnaceFrame)
+    if (furnaceFrame) {
+      const pi = await post('/api/station', { action: 'put', role: 'input', name: 'oak_log', count: 1 })
+      const pf = await post('/api/station', { action: 'put', role: 'fuel', name: 'coal', count: 1 })
+      check('furnace takes smelt + fuel items', pi.body.ok === true && pf.body.ok === true, JSON.stringify([pi.body, pf.body]))
+      const cooked = await until(async () => {
+        const r = await get('/api/station')
+        return r.body.output && r.body.output.name === 'charcoal' ? r.body : null
+      }, 90000, 'the log to smelt into charcoal').catch(() => null)
+      check('furnace really smelts log -> charcoal', !!cooked, cooked ? 'charcoal out' : 'no output')
+      if (cooked) {
+        const tk = await post('/api/station', { action: 'take', role: 'output' })
+        check('take output collects the charcoal', tk.body.ok === true, JSON.stringify(tk.body))
+        await until(async () => (await invCount('charcoal')) >= 1, 25000, 'the charcoal').catch(() => null)
+        check('charcoal lands in the inventory', (await invCount('charcoal')) >= 1,
+          'inv: ' + JSON.stringify((await get('/api/inventory')).body.items) + ' station: ' + JSON.stringify(await get('/api/station')).slice(0, 200))
+      }
+      await post('/api/station', { action: 'close' })
+    }
+
+    // 15. the in-game command grammar through the chat path
     const chatCmd = await post('/api/command', { command: 'say hello from minepilot' })
     check('say works', chatCmd.body.result.ok === true)
 
-    // 15. clean shutdown
+    // 16. clean shutdown
     ws.close()
   } finally {
     child.kill('SIGINT')

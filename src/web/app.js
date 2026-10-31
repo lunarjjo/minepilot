@@ -28,7 +28,11 @@ const S = {
   dragging: false,
   panning: false,
   panLast: null,
-  downButton: 0
+  downButton: 0,
+  // craft + station
+  recipes: [],
+  recipeTotal: 0,
+  station: { open: false }
 }
 
 const CHUNK = 16
@@ -123,6 +127,15 @@ function handle (msg) {
       S.inventory = msg.items || []
       S.held = msg.held
       renderInventory()
+      break
+    case 'recipes':
+      S.recipes = msg.recipes || []
+      S.recipeTotal = msg.total || 0
+      renderRecipes()
+      break
+    case 'station':
+      S.station = msg
+      renderStation()
       break
     default:
       break
@@ -521,14 +534,18 @@ function showSelectionMenu (x, y, sel) {
   ])
 }
 
-// entity list clicks -> follow / attack menu
+// entity list clicks -> follow / attack / interact menu
 function entityMenu (e, ent) {
   const rect = $('side').getBoundingClientRect()
-  popup(rect.left - 190, e.clientY, ent.username || ent.type, [
+  const items = [
     { label: 'follow', fn: () => send({ t: 'command', text: ent.username ? `follow player ${ent.username}` : `follow entity ${ent.type}` }) },
     { label: 'attack', danger: true, fn: () => send({ t: 'command', text: `attack ${ent.username || ent.type}` }) },
     { label: 'goto', fn: () => send({ t: 'command', text: `goto ${Math.floor(ent.pos[0])} ${Math.floor(ent.pos[1])} ${Math.floor(ent.pos[2])}` }) }
-  ])
+  ]
+  if (String(ent.type) === 'villager') {
+    items.push({ label: 'trade', fn: () => send({ t: 'station:open', kind: 'villager', entityId: ent.id }) })
+  }
+  popup(rect.left - 190, e.clientY, ent.username || ent.type, items)
 }
 
 // --------------------------------------------------------------- render
@@ -647,6 +664,216 @@ function renderSettingsFiltered (query) {
 }
 
 $('settings-search').addEventListener('input', (e) => renderSettingsFiltered(e.target.value))
+
+// --------------------------------------------------------------- craft tab
+// recipes arrive availability-decorated from the server; the craft action
+// itself is the plain `craft <item> <n>` command, which walks to a table
+// when the recipe needs one — the same path the console uses.
+let recipeSearchTimer = null
+$('recipe-search').addEventListener('input', (e) => {
+  if (recipeSearchTimer) clearTimeout(recipeSearchTimer)
+  recipeSearchTimer = setTimeout(() => {
+    send({ t: 'recipes:get', q: e.target.value, craftableFirst: !e.target.value })
+  }, 200)
+})
+
+function renderRecipes () {
+  const list = $('recipe-list')
+  const note = $('craft-note')
+  note.textContent = `${S.recipes.length} shown · ${S.recipeTotal} recipes known · green = craftable right now`
+  if (S.recipes.length === 0) {
+    list.innerHTML = '<div class="recipe"><span style="color:var(--dim)">nothing matches — clear the search or give the bot materials</span></div>'
+    return
+  }
+  list.innerHTML = ''
+  for (const r of S.recipes) {
+    const el = document.createElement('div')
+    el.className = 'recipe' + (r.craftable ? ' craftable' : '')
+    const ings = r.ingredients.map((i) => {
+      const cls = i.have >= i.need ? 'have' : 'lack'
+      return `<span class="ing ${cls}">${esc(shortName(i.name))} ${i.have}/${i.need}</span>`
+    }).join('')
+    el.innerHTML = `
+      <div class="r-head">
+        <span class="r-name">${esc(r.displayName || r.name)}</span>
+        ${r.count > 1 ? `<span class="r-count">×${r.count}</span>` : ''}
+        ${r.requiresTable ? '<span class="r-table" title="needs a crafting table in reach">table</span>' : ''}
+      </div>
+      <div class="r-ings">${ings}</div>`
+    const btn = document.createElement('button')
+    btn.className = 'r-craft'
+    btn.textContent = r.craftable ? 'craft' : 'missing ' + r.missing
+    btn.disabled = !r.craftable
+    btn.onclick = () => {
+      const n = prompt(`craft how many ${r.name}? (one craft makes ${r.count})`, '1')
+      if (!n) return
+      send({ t: 'command', text: `craft ${r.name} ${Number(n) || 1}` })
+    }
+    el.appendChild(btn)
+    list.appendChild(el)
+  }
+}
+
+// ------------------------------------------------------------ station tab
+$('st-open-chest').onclick = () => send({ t: 'station:open', kind: 'chest' })
+$('st-open-furnace').onclick = () => send({ t: 'station:open', kind: 'furnace' })
+$('st-open-table').onclick = () => send({ t: 'station:open', kind: 'crafting_table' })
+$('st-close').onclick = () => send({ t: 'station:action', action: 'close' })
+
+function stationItemMenu (e, it, extra) {
+  const rect = $('side').getBoundingClientRect()
+  popup(rect.left - 190, e.clientY, it.name, [
+    ...extra,
+    { label: 'equip to hand', fn: () => send({ t: 'inventory:equip', name: it.name }) },
+    { label: 'drop stack', danger: true, fn: () => send({ t: 'inventory:drop', name: it.name }) }
+  ])
+}
+
+function stationInventoryGrid (title) {
+  // the bot's own inventory, clickable for transfers into the open station
+  const wrap = document.createElement('div')
+  wrap.className = 'station-inv'
+  const h = document.createElement('div')
+  h.className = 'st-title'
+  h.textContent = title
+  wrap.appendChild(h)
+  const grid = document.createElement('div')
+  grid.className = 'st-grid'
+  if (S.inventory.length === 0) {
+    grid.innerHTML = '<div class="st-slot empty">nothing carried</div>'
+  }
+  for (const it of S.inventory) {
+    const el = document.createElement('div')
+    el.className = 'st-slot'
+    el.innerHTML = `<b>${esc(shortName(it.name))}</b>${it.count > 1 ? ' ×' + it.count : ''}`
+    el.title = it.name
+    el.onclick = (ev) => {
+      const st = S.station || {}
+      if (st.kind === 'chest') {
+        stationItemMenu(ev, it, [
+          { label: 'deposit stack', fn: () => send({ t: 'station:action', action: 'deposit', name: it.name }) },
+          { label: 'deposit 1', fn: () => send({ t: 'station:action', action: 'deposit', name: it.name, count: 1 }) }
+        ])
+      } else if (st.kind === 'furnace') {
+        stationItemMenu(ev, it, [
+          { label: 'put in smelt slot', fn: () => send({ t: 'station:action', action: 'put', role: 'input', name: it.name }) },
+          { label: 'put in fuel slot', fn: () => send({ t: 'station:action', action: 'put', role: 'fuel', name: it.name }) }
+        ])
+      }
+    }
+    grid.appendChild(el)
+  }
+  wrap.appendChild(grid)
+  return wrap
+}
+
+function renderStation () {
+  const body = $('station-body')
+  const st = S.station || { open: false }
+  if (!st.open) {
+    body.innerHTML = '<div class="st-empty">no station open — click <b>open chest</b> / <b>open furnace</b> to walk to the nearest one<br><span style="color:var(--dim)">a villager in range can be opened from the <i>nearby</i> list</span></div>'
+    return
+  }
+  body.innerHTML = ''
+
+  if (st.kind === 'chest') {
+    const h = document.createElement('div')
+    h.className = 'st-title'
+    h.textContent = `chest at ${st.pos ? st.pos.map(Math.floor).join(' ') : '?'}`
+    body.appendChild(h)
+    const grid = document.createElement('div')
+    grid.className = 'st-grid'
+    const items = st.items || []
+    if (items.length === 0) grid.innerHTML = '<div class="st-slot empty">chest is empty</div>'
+    for (const it of items) {
+      const el = document.createElement('div')
+      el.className = 'st-slot'
+      el.innerHTML = `<b>${esc(shortName(it.name))}</b>${it.count > 1 ? ' ×' + it.count : ''}`
+      el.title = it.name
+      el.onclick = (ev) => stationItemMenu(ev, it, [
+        { label: 'withdraw stack', fn: () => send({ t: 'station:action', action: 'withdraw', name: it.name }) },
+        { label: 'withdraw 1', fn: () => send({ t: 'station:action', action: 'withdraw', name: it.name, count: 1 }) }
+      ])
+      grid.appendChild(el)
+    }
+    body.appendChild(grid)
+    const all = document.createElement('div')
+    all.className = 'row'
+    all.innerHTML = '<button id="st-dep-all">deposit everything</button>'
+    body.appendChild(all)
+    body.querySelector('#st-dep-all').onclick = () => send({ t: 'station:action', action: 'depositAll' })
+    body.appendChild(stationInventoryGrid('bot inventory — click to deposit'))
+  } else if (st.kind === 'furnace') {
+    const h = document.createElement('div')
+    h.className = 'st-title'
+    h.textContent = `furnace at ${st.pos ? st.pos.map(Math.floor).join(' ') : '?'}`
+    body.appendChild(h)
+    const prog = document.createElement('div')
+    prog.className = 'st-progress'
+    const pct = Math.round((st.progress || 0) * 100)
+    const burn = Math.round((st.burn || 0) * 100)
+    prog.innerHTML = `
+      <div class="bar"><div class="fill cook" style="width:${pct}%"></div></div>
+      <div class="bar"><div class="fill burn" style="width:${burn}%"></div></div>
+      <div class="tiny mono">smelt ${pct}% · fuel ${burn}%</div>`
+    body.appendChild(prog)
+    const grid = document.createElement('div')
+    grid.className = 'st-grid three'
+    const slot = (label, item, actions) => {
+      const el = document.createElement('div')
+      el.className = 'st-slot big' + (item ? '' : ' empty')
+      el.innerHTML = `<span class="tag">${label}</span>${item ? `<b>${esc(shortName(item.name))}</b>${item.count > 1 ? ' ×' + item.count : ''}` : '—'}`
+      if (item && actions.length > 0) {
+        el.onclick = (ev) => stationItemMenu(ev, item, actions)
+      }
+      return el
+    }
+    grid.appendChild(slot('smelt', st.input, [{ label: 'take back', fn: () => send({ t: 'station:action', action: 'take', role: 'input' }) }]))
+    grid.appendChild(slot('fuel', st.fuel, [{ label: 'take back', fn: () => send({ t: 'station:action', action: 'take', role: 'fuel' }) }]))
+    grid.appendChild(slot('output', st.output, [{ label: 'take', fn: () => send({ t: 'station:action', action: 'take', role: 'output' }) }]))
+    body.appendChild(grid)
+    body.appendChild(stationInventoryGrid('bot inventory — click to put'))
+  } else if (st.kind === 'villager') {
+    const h = document.createElement('div')
+    h.className = 'st-title'
+    h.textContent = 'villager trades'
+    body.appendChild(h)
+    for (const tr of st.trades || []) {
+      const el = document.createElement('div')
+      el.className = 'recipe' + (tr.disabled ? '' : ' craftable')
+      const ins = [tr.input1, tr.input2].filter(Boolean)
+        .map((i) => `<span class="ing have">${esc(shortName(i.name))} ×${i.count}</span>`).join('')
+      const out = tr.output ? `<span class="ing out">${esc(shortName(tr.output.name))} ×${tr.output.count}</span>` : ''
+      el.innerHTML = `<div class="r-ings">${ins}<span class="ing arrow">→</span>${out}</div>`
+      const btn = document.createElement('button')
+      btn.className = 'r-craft'
+      btn.textContent = tr.disabled ? 'locked' : 'trade'
+      btn.disabled = !!tr.disabled
+      btn.onclick = () => send({ t: 'station:action', action: 'trade', index: tr.index, times: 1 })
+      el.appendChild(btn)
+      body.appendChild(el)
+    }
+    if ((st.trades || []).length === 0) {
+      body.innerHTML += '<div class="st-slot empty">this villager offers nothing (or trades are loading)</div>'
+    }
+  } else if (st.kind === 'crafting_table') {
+    const h = document.createElement('div')
+    h.className = 'st-title'
+    h.textContent = `crafting table at ${st.pos ? st.pos.map(Math.floor).join(' ') : '?'}`
+    body.appendChild(h)
+    body.innerHTML += '<div class="st-empty">table recipes are unlocked — pick what to craft in the <b>craft</b> tab</div>'
+  }
+}
+
+// refresh recipes when the inventory ticks (availability changes)
+let lastInvSignature = ''
+setInterval(() => {
+  const sig = S.inventory.map((i) => i.name + ':' + i.count).join('|')
+  if (sig !== lastInvSignature) {
+    lastInvSignature = sig
+    send({ t: 'recipes:get', q: $('recipe-search').value, craftableFirst: !$('recipe-search').value })
+  }
+}, 2500)
 
 // ------------------------------------------------------------- console
 function feed (html, cls) {

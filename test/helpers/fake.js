@@ -92,6 +92,125 @@ const SEED_BLOCKS = {
   nether_wart: 'nether_wart'
 }
 
+// an item stack shaped like mineflayer's: name, count, slot, numeric type
+function mkItem (name, count, slot) {
+  const registry = require('minecraft-data')('1.21.4')
+  const meta = registry.itemsByName[name]
+  return { name, count: count || 1, slot: slot === undefined ? -1 : slot, type: meta ? meta.id : -1 }
+}
+
+// fake container windows — the same surface the station manager touches
+// (items/deposit/withdraw for chests, inputItem/putInput/... + progress for
+// furnaces, trades for villagers), moving stacks between the bot's
+// inventory and the container's storage for real, so tests assert on state
+class FakeWindow extends EventEmitter {
+  constructor (bot, kind) {
+    super()
+    this.bot = bot
+    this.kind = kind
+    this.storage = [] // item stacks
+    this.closed = false
+    this.progress = 0
+    this.fuel = 0
+    this.trades = []
+    // window layout constants (furnace: slots 0/1/2, player range after)
+    this.inventoryStart = 3
+    this.inventoryEnd = 39
+  }
+
+  close () {
+    if (this.closed) return
+    this.closed = true
+    this.emit('close')
+  }
+
+  // real mineflayer windows: items() = the PLAYER range inside the window
+  // (LIVE — bot.inventory itself is frozen while the window is open),
+  // containerItems() = the container's own slots. the fake mirrors both
+  // semantics against the fake bot's live arrays.
+  items () { return this.bot.inventory.items() }
+
+  containerItems () { return this.storage.filter(Boolean) }
+
+  deposit (itemType, metadata, count) {
+    const stack = this.bot.inventory.items().find((it) => it.type === itemType)
+    if (!stack) throw new Error(`no item type ${itemType} to deposit`)
+    const move = Math.min(stack.count, count === null ? stack.count : count)
+    stack.count -= move
+    if (stack.count <= 0) this.bot.removeStack(stack)
+    const existing = this.storage.find((it) => it && it.name === stack.name && it.count < 64)
+    if (existing) existing.count += move
+    else this.storage.push({ ...stack, count: move, slot: this.storage.length })
+    this.emit('update')
+  }
+
+  withdraw (itemType, metadata, count) {
+    const stack = this.storage.find((it) => it && it.type === itemType)
+    if (!stack) throw new Error(`no item type ${itemType} in the container`)
+    const move = Math.min(stack.count, count === null ? stack.count : count)
+    stack.count -= move
+    if (stack.count <= 0) this.storage.splice(this.storage.indexOf(stack), 1)
+    this.bot.addStack({ ...stack, count: move })
+    this.emit('update')
+  }
+
+  // ---- furnace surface
+  inputItem () { return this.storage.find((s) => s && s.role === 'input') || null }
+  fuelItem () { return this.storage.find((s) => s && s.role === 'fuel') || null }
+  outputItem () { return this.storage.find((s) => s && s.role === 'output') || null }
+
+  putSlot (role, itemType, count) {
+    const stack = this.bot.inventory.items().find((it) => it.type === itemType)
+    if (!stack) throw new Error(`no item type ${itemType}`)
+    const move = Math.min(stack.count, count)
+    stack.count -= move
+    if (stack.count <= 0) this.bot.removeStack(stack)
+    this.storage = this.storage.filter((s) => !s || s.role !== role)
+    this.storage.push({ ...stack, count: move, role })
+    this.emit('update')
+  }
+
+  takeSlot (role) {
+    const it = this.storage.find((s) => s && s.role === role)
+    if (!it) throw new Error(`nothing in the ${role} slot`)
+    this.storage.splice(this.storage.indexOf(it), 1)
+    this.bot.addStack({ name: it.name, count: it.count, type: it.type })
+    this.emit('update')
+    return it
+  }
+
+  putInput (itemType, metadata, count) { return this.putSlot('input', itemType, count) }
+  putFuel (itemType, metadata, count) { return this.putSlot('fuel', itemType, count) }
+  takeInput () { return this.takeSlot('input') }
+  takeFuel () { return this.takeSlot('fuel') }
+  takeOutput () { return this.takeSlot('output') }
+
+  // smelt step for tests: consume input + fuel over time, produce output
+  smeltTick (outputName) {
+    const input = this.inputItem()
+    const fuel = this.fuelItem()
+    if (!input) { this.progress = 0; this.emit('update'); return }
+    if (this.fuel <= 0) {
+      if (!fuel) { this.emit('update'); return }
+      this.takeSlotSilent('fuel')
+      this.fuel = 1
+    }
+    this.fuel = Math.max(0, this.fuel - 0.1)
+    this.progress = Math.min(1, this.progress + 0.25)
+    if (this.progress >= 1) {
+      this.takeSlotSilent('input')
+      this.storage.push({ name: outputName, count: 1, type: -2, role: 'output' })
+      this.progress = 0
+    }
+    this.emit('update')
+  }
+
+  takeSlotSilent (role) {
+    const it = this.storage.find((s) => s && s.role === role)
+    if (it) this.storage.splice(this.storage.indexOf(it), 1)
+  }
+}
+
 class FakeBot extends EventEmitter {
   constructor (opts, world) {
     super()
@@ -129,6 +248,19 @@ class FakeBot extends EventEmitter {
 
   setInventory (items) {
     this.inventory.items = () => items
+  }
+
+  addStack (stack) {
+    const items = this.inventory.items()
+    const existing = items.find((it) => it.name === stack.name && it.count + stack.count <= 64)
+    if (existing) existing.count += stack.count
+    else items.push(stack)
+  }
+
+  removeStack (stack) {
+    const items = this.inventory.items()
+    const i = items.indexOf(stack)
+    if (i >= 0) items.splice(i, 1)
   }
 
   async equip (item) {
@@ -210,15 +342,76 @@ class FakeBot extends EventEmitter {
 
   findBlocks ({ matching, maxDistance = 64, count = 16 }) {
     const p = this.entity ? this.entity.position : new Vec3(0, 64, 0)
-    const wantedIds = new Set(matching)
+    // real mineflayer takes a single id, an array or null (any block)
+    const wantedIds = matching === null || matching === undefined ? null : new Set(Array.isArray(matching) ? matching : [matching])
     const out = []
     for (const b of this.world.blocks.values()) {
-      if (!wantedIds.has(b.id)) continue
+      if (wantedIds && !wantedIds.has(b.id)) continue
       const d = b.position.distanceTo(p)
       if (d <= maxDistance) out.push({ v: b.position, d })
     }
     out.sort((a, b) => a.d - b.d)
     return out.slice(0, count).map((o) => o.v)
+  }
+
+  // ---- container windows ------------------------------------------------
+
+  async openChest (block) {
+    const w = new FakeWindow(this, 'chest')
+    this.chestWindows = this.chestWindows || []
+    this.chestWindows.push(w)
+    return w
+  }
+
+  async openFurnace (block) {
+    const w = new FakeWindow(this, 'furnace')
+    this.furnaceWindows = this.furnaceWindows || []
+    this.furnaceWindows.push(w)
+    return w
+  }
+
+  async openCraftingTable (block) {
+    const w = new FakeWindow(this, 'crafting_table')
+    this.tableWindows = this.tableWindows || []
+    this.tableWindows.push(w)
+    return w
+  }
+
+  async openVillager (entity) {
+    const w = new FakeWindow(this, 'villager')
+    w.trades = (entity && entity.trades) || []
+    this.villagerWindows = this.villagerWindows || []
+    this.villagerWindows.push(w)
+    return w
+  }
+
+  async trade (villagerWindow, index, times) {
+    const tr = (villagerWindow.trades || [])[index]
+    if (!tr) throw new Error(`no trade ${index}`)
+    for (let i = 0; i < (times || 1); i++) {
+      const pay = (item) => {
+        const stack = this.inventory.items().find((it) => it.name === item.name && it.count >= item.count)
+        if (!stack) throw new Error(`missing ${item.count} ${item.name}`)
+        stack.count -= item.count
+        if (stack.count <= 0) this.removeStack(stack)
+      }
+      pay(tr.inputItem1)
+      if (tr.inputItem2) pay(tr.inputItem2)
+      this.addStack({ ...tr.outputItem })
+    }
+    villagerWindow.emit('update')
+  }
+
+  // the click-out/click-in primitive the station manager uses for furnace
+  // takes (mirrors mineflayer's bot.transfer for the furnace slot layout)
+  async transfer (options) {
+    const w = options.window
+    const slot = options.sourceStart
+    const roles = ['input', 'fuel', 'output']
+    if (w.kind !== 'furnace' || !Number.isInteger(slot) || slot < 0 || slot > 2) {
+      throw new Error('fake transfer only handles furnace slots 0-2')
+    }
+    return w.takeSlot(roles[slot])
   }
 
   // ---- kinematics ------------------------------------------------------
@@ -312,4 +505,4 @@ class FakeBot extends EventEmitter {
   }
 }
 
-module.exports = { FakeBot, VoxelWorld, mcData, makeBlock }
+module.exports = { FakeBot, VoxelWorld, mcData, makeBlock, mkItem, FakeWindow }

@@ -199,8 +199,12 @@ async function commandChest (ctx, args) {
     return { ok: false, error: `cannot open the chest: ${String(e.message || e).slice(0, 60)}` }
   }
   try {
+    // the chest's own storage — containerItems(); window.items() would be
+    // the PLAYER range inside the window (a mineflayer subtlety: deposit
+    // searches the player range, withdraw the container range)
+    const containerItems = () => (chest.containerItems ? chest.containerItems() : chest.items())
     if (args.mode === 'list') {
-      const its = chest.items()
+      const its = containerItems()
       if (its.length === 0) reply('the chest is empty')
       const counts = new Map()
       for (const it of its) counts.set(it.name, (counts.get(it.name) || 0) + (it.count || 1))
@@ -223,7 +227,7 @@ async function commandChest (ctx, args) {
     }
     // withdraw
     const filter = args.filter
-    const its = chest.items().filter((it) => !filter || it.name === filter)
+    const its = containerItems().filter((it) => !filter || it.name === filter)
     if (its.length === 0) return { ok: false, error: filter ? `no ${filter} in the chest` : 'the chest is empty' }
     let moved = 0
     for (const it of its) {
