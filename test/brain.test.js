@@ -187,25 +187,31 @@ test('full-auto progression: logs to stone tools against the fake world', async 
   const has = (name) => (bot.inventory.items().find((i) => i.name === name) || {}).count || 0
 
   // drive the brain manually: each tick is one decision cycle (mining
-  // waits make each tick take seconds — budget accordingly)
+  // waits make each tick take seconds). the 400s budget covers a slow
+  // 2-core ci runner: a throw before dispose() leaves the executor's
+  // ref'd timer alive, which holds the node:test child open forever —
+  // the ci hang was exactly a failed assert skipping the cleanup
   let ticks = 0
   const t0 = Date.now()
-  while (ticks < 600 && Date.now() - t0 < 220000) {
-    await brain.tick()
-    await sleep(60)
-    ticks++
-    if (has('stone_pickaxe') > 0 && has('torch') > 0) break
-  }
+  try {
+    while (ticks < 900 && Date.now() - t0 < 400000) {
+      await brain.tick()
+      await sleep(60)
+      ticks++
+      if (has('stone_pickaxe') > 0 && has('torch') > 0) break
+    }
 
-  // the whole ladder happened with zero commands
-  assert.ok(has('wooden_pickaxe') > 0, 'wooden pickaxe crafted (got ' + JSON.stringify(bot.inventory.items().map((i) => i.name)) + ')')
-  assert.ok(has('stone_pickaxe') > 0, 'stone pickaxe crafted')
-  assert.ok(has('stone_sword') > 0, 'stone sword crafted')
-  assert.ok(has('torch') > 0, 'torches crafted from coal')
-  // a crafting table was placed into the world somewhere along the way
-  const table = [...w.blocks.values()].some((b) => b.name === 'crafting_table')
-  assert.ok(table, 'crafting table placed into the world')
-  brain.dispose()
+    // the whole ladder happened with zero commands
+    assert.ok(has('wooden_pickaxe') > 0, 'wooden pickaxe crafted (got ' + JSON.stringify(bot.inventory.items().map((i) => i.name)) + ')')
+    assert.ok(has('stone_pickaxe') > 0, 'stone pickaxe crafted')
+    assert.ok(has('stone_sword') > 0, 'stone sword crafted')
+    assert.ok(has('torch') > 0, 'torches crafted from coal')
+    // a crafting table was placed into the world somewhere along the way
+    const table = [...w.blocks.values()].some((b) => b.name === 'crafting_table')
+    assert.ok(table, 'crafting table placed into the world')
+  } finally {
+    brain.dispose()
+  }
 })
 
 test('full-auto reflexes: a creeper interrupts and flees', async () => {
@@ -213,14 +219,17 @@ test('full-auto reflexes: a creeper interrupts and flees', async () => {
   brain.setEnabled(true)
   // a creeper 5 blocks away while the brain is mid-activity
   bot.entities[77] = { id: 77, name: 'creeper', type: 'creeper', position: new Vec3(5.5, 62, 0.5), velocity: new Vec3(0, 0, 0) }
-  await brain.tick()
-  await sleep(100)
-  assert.equal(brain.status().activity, 'flee')
-  // and the bot actually moved away from the creeper's x
-  await sleep(3000)
-  const x = bot.entity.position.x
-  assert.ok(x < 0, `bot ran west of the creeper (x=${x})`)
-  brain.dispose()
+  try {
+    await brain.tick()
+    await sleep(100)
+    assert.equal(brain.status().activity, 'flee')
+    // and the bot actually moved away from the creeper's x
+    await sleep(3000)
+    const x = bot.entity.position.x
+    assert.ok(x < 0, `bot ran west of the creeper (x=${x})`)
+  } finally {
+    brain.dispose()
+  }
 })
 
 test('full-auto eats when hungry', async () => {
@@ -228,13 +237,16 @@ test('full-auto eats when hungry', async () => {
   bot.setInventory([mkItem('bread', 3)])
   bot.food = 6
   brain.setEnabled(true)
-  await brain.tick()
-  await sleep(100)
-  assert.equal(brain.status().activity, 'eat')
-  // the bread was consumed
-  await sleep(500)
-  assert.equal((bot.inventory.items().find((i) => i.name === 'bread') || {}).count, 2)
-  brain.dispose()
+  try {
+    await brain.tick()
+    await sleep(100)
+    assert.equal(brain.status().activity, 'eat')
+    // the bread was consumed
+    await sleep(500)
+    assert.equal((bot.inventory.items().find((i) => i.name === 'bread') || {}).count, 2)
+  } finally {
+    brain.dispose()
+  }
 })
 
 test('auto command round-trips through the executor', async () => {
