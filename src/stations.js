@@ -122,6 +122,18 @@ function createStationManager (ctx, broadcast, log) {
     const w = session.window
     session = null
     try { if (w && w.close) w.close() } catch (e) { /* already gone */ }
+    // force the server to resend the player inventory. closing a container
+    // leaves mineflayer's bot.inventory racing the trailing window packets
+    // — stacks split, ingredients go phantom, and the next craft fails with
+    // "missing ingredient" for items visibly carried (reproduced live).
+    // the stateId -1 no-op click asks for the full window_items packet.
+    const bot = botNow()
+    try {
+      if (bot && bot.inventory && typeof bot._syncWindow === 'function') {
+        const p = bot._syncWindow(bot.inventory)
+        if (p && p.catch) p.catch(() => {})
+      }
+    } catch (e) { /* older builds */ }
     if (announce) broadcast({ t: 'station', open: false })
   }
 
@@ -187,7 +199,11 @@ function createStationManager (ctx, broadcast, log) {
         session = { kind: 'furnace', pos: target, window }
         say(`furnace opened at ${target.x} ${target.y} ${target.z}`)
       } else if (kind === 'crafting_table') {
-        const window = await bot.openCraftingTable(block)
+        // mineflayer 4.39 removed bot.openCraftingTable — openBlock is the
+        // current api and returns the same window
+        const window = await (typeof bot.openCraftingTable === 'function'
+          ? bot.openCraftingTable(block)
+          : bot.openBlock(block))
         session = { kind: 'crafting_table', pos: target, window }
         say(`crafting table opened at ${target.x} ${target.y} ${target.z}`)
       } else {
