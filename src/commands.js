@@ -133,6 +133,11 @@ const COMMANDS = [
   { name: 'eat', args: '', help: 'eat once from the inventory', baritone: false },
   { name: 'craft', args: '<item> [count]', help: 'craft an item from carried materials', baritone: false },
   { name: 'chest', args: '<deposit|withdraw|list> [filter]', help: 'interact with a chest in range', baritone: false },
+  { name: 'feed', args: '<entity> [item]', help: 'feed a nearby animal (breeding food by default)', baritone: false },
+  { name: 'breed', args: '<entity>', help: 'feed two animals of a kind so they breed', baritone: false },
+  { name: 'sleep', args: '', help: 'walk to the nearest bed and sleep', baritone: false },
+  { name: 'wake', args: '', help: 'get out of the bed', baritone: false },
+  { name: 'activate', args: '<block>', help: 'right-click the nearest block of a type (lever, door...)', baritone: false },
   { name: 'inventory', args: '[hand | armor]', help: 'list what the bot carries', baritone: false },
   { name: 'status', args: '', help: 'full status readout', baritone: false },
   { name: 'spawn', args: '', help: 'walk back to world spawn', baritone: false }
@@ -523,6 +528,28 @@ function parseCommand (raw) {
       }
       if (rest.length !== 1) return fail('usage: attack <entity|player> | attack off')
       return { ok: true, name, args: { target: rest[0].toLowerCase() } }
+    }
+    case 'feed': {
+      if (rest.length === 0 || rest.length > 2) return fail('usage: feed <entity> [item]')
+      if (!NAME_RE.test(rest[0])) return fail(`"${rest[0]}" is not an entity name`)
+      const item = rest.length === 2 ? rest[1].toLowerCase() : null
+      if (item && !NAME_RE.test(item)) return fail(`"${rest[1]}" is not an item name`)
+      return { ok: true, name, args: { entity: rest[0].toLowerCase(), item } }
+    }
+    case 'breed': {
+      if (rest.length !== 1) return fail('usage: breed <entity>')
+      if (!NAME_RE.test(rest[0])) return fail(`"${rest[0]}" is not an entity name`)
+      return { ok: true, name, args: { entity: rest[0].toLowerCase() } }
+    }
+    case 'activate': {
+      if (rest.length !== 1) return fail('usage: activate <block>')
+      if (!NAME_RE.test(rest[0])) return fail(`"${rest[0]}" is not a block name`)
+      return { ok: true, name, args: { block: rest[0].toLowerCase() } }
+    }
+    case 'sleep':
+    case 'wake': {
+      if (rest.length !== 0) return fail(`${name} takes no arguments`)
+      return { ok: true, name, args: {} }
     }
     case 'flee': {
       let radius = 32

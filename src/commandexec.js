@@ -756,6 +756,19 @@ async function dispatchCommand (name, args, ctx, refs) {
       return inv.commandChest(ctx, args)
     }
 
+    case 'feed':
+    case 'breed':
+    case 'sleep':
+    case 'wake':
+    case 'activate': {
+      const inter = require('./interactions')
+      if (name === 'feed') return inter.feedEntity(ctx, args.entity, args.item)
+      if (name === 'breed') return inter.breedPair(ctx, args.entity)
+      if (name === 'sleep') return inter.sleepInBed(ctx)
+      if (name === 'wake') return inter.wakeUp(ctx)
+      return inter.activateBlock(ctx, args.block)
+    }
+
     case 'litematica': {
       reply('litematica loading lands with the builder phase — next push')
       return { ok: false, error: 'not implemented yet' }

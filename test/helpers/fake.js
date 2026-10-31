@@ -414,6 +414,41 @@ class FakeBot extends EventEmitter {
     return w.takeSlot(roles[slot])
   }
 
+  // ---- entity + block interactions ---------------------------------
+
+  async activateEntity (entity) {
+    this.activatedEntities = this.activatedEntities || []
+    this.activatedEntities.push(entity.name || entity.type || String(entity.id))
+    // feeding consumes one unit of the held item, the way a server does
+    if (this.heldItem) {
+      const items = this.inventory.items()
+      const stack = items.find((it) => it.name === this.heldItem.name)
+      if (stack) {
+        stack.count -= 1
+        if (stack.count <= 0) this.removeStack(stack)
+      }
+    }
+    return true
+  }
+
+  async activateBlock (block) {
+    this.activatedBlocks = this.activatedBlocks || []
+    this.activatedBlocks.push(block.name)
+    return true
+  }
+
+  async sleep (bedBlock) {
+    this.isSleeping = true
+    this.emit('sleep')
+    return true
+  }
+
+  async wake () {
+    if (!this.isSleeping) throw new Error('not sleeping')
+    this.isSleeping = false
+    return true
+  }
+
   // ---- kinematics ------------------------------------------------------
 
   blockNameAt (x, y, z) {

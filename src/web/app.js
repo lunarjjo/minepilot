@@ -535,6 +535,7 @@ function showSelectionMenu (x, y, sel) {
 }
 
 // entity list clicks -> follow / attack / interact menu
+const FEEDABLE = /cow|sheep|mooshroom|pig|chicken|rabbit|horse|donkey|mule|wolf|cat|ocelot|fox|panda|turtle|camel|hoglin|frog|goat|bee|sniffer|armadillo/
 function entityMenu (e, ent) {
   const rect = $('side').getBoundingClientRect()
   const items = [
@@ -544,6 +545,10 @@ function entityMenu (e, ent) {
   ]
   if (String(ent.type) === 'villager') {
     items.push({ label: 'trade', fn: () => send({ t: 'station:open', kind: 'villager', entityId: ent.id }) })
+  }
+  if (FEEDABLE.test(String(ent.type))) {
+    items.push({ label: 'feed', fn: () => send({ t: 'command', text: `feed ${ent.type}` }) })
+    items.push({ label: 'breed', fn: () => send({ t: 'command', text: `breed ${ent.type}` }) })
   }
   popup(rect.left - 190, e.clientY, ent.username || ent.type, items)
 }

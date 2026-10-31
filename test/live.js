@@ -111,8 +111,12 @@ async function main () {
     const hello = await until(() => msgs.find((m) => m.t === 'hello'), 10000, 'the hello message')
     check('ws hello carries identity + settings + waypoints', hello.username === BOT_NAME && hello.settings.length > 60)
 
-    // 4. the map streams real chunks
-    ws.send(JSON.stringify({ t: 'viewport', cx0: -2, cz0: -2, cx1: 2, cz1: 2 }))
+    // 4. the map streams real chunks (viewport centered on the bot — a
+    //    reused world may have it logged out far from spawn)
+    const spawnNode = (await get('/api/status')).body.position
+    const bcx = Math.floor(spawnNode.x / 16)
+    const bcz = Math.floor(spawnNode.z / 16)
+    ws.send(JSON.stringify({ t: 'viewport', cx0: bcx - 2, cz0: bcz - 2, cx1: bcx + 2, cz1: bcz + 2 }))
     const chunkMsg = await until(() => msgs.find((m) => m.t === 'chunks' && m.chunks.length > 0), 30000, 'map chunks')
     const anyCol = chunkMsg.chunks.flatMap((c) => c.cols).filter(Boolean)
     check('map streams the superflat terrain', anyCol.length > 100 && anyCol.some((c) => c.n === 'grass_block'))
@@ -344,11 +348,77 @@ async function main () {
       await post('/api/station', { action: 'close' })
     }
 
-    // 15. the in-game command grammar through the chat path
+    // 15. advanced interactions: feed, breed, activate a lever, sleep
+    const pos3 = (await get('/api/status')).body.position
+    await post('/api/command', { command: 'say /summon cow ' + Math.floor(pos3.x + 2) + ' ' + Math.floor(pos3.y) + ' ' + Math.floor(pos3.z + 1) })
+    await post('/api/command', { command: 'say /summon cow ' + Math.floor(pos3.x - 2) + ' ' + Math.floor(pos3.y) + ' ' + Math.floor(pos3.z - 1) })
+    await give('wheat', 8)
+    await until(async () => (await invCount('wheat')) >= 8, 20000, 'wheat').catch(() => null)
+    const cowSeen = await until(() => msgs.find((m) => m.t === 'entities' && m.entities.some((e) => e.type === 'cow')), 20000, 'the cows to appear').catch(() => null)
+    check('summoned cows appear in the entity feed', !!cowSeen)
+    const feed = await post('/api/command', { command: 'feed cow' })
+    check('feed accepted', feed.body.result.ok === true, feed.body.lines.join(' | '))
+    await until(async () => (await invCount('wheat')) <= 7, 20000, 'the wheat to be eaten').catch(() => null)
+    check('feeding consumes the breeding food', (await invCount('wheat')) <= 7, `wheat: ${await invCount('wheat')}`)
+    const breed = await post('/api/command', { command: 'breed cow' })
+    check('breed accepted', breed.body.result.ok === true, breed.body.lines.join(' | '))
+    await until(async () => (await invCount('wheat')) <= 6, 20000, 'the breed feeds').catch(() => null)
+    // one wheat per accepted feed: the standalone feed already put one
+    // cow in love mode, so breed's first right-click on it is a vanilla
+    // no-op — two feeds consumed in total is the correct outcome
+    check('breeding reaches both cows', (await invCount('wheat')) <= 6, `wheat: ${await invCount('wheat')}`)
+
+    // a lever placed and flipped through activate
+    const pos4 = (await get('/api/status')).body.position
+    await give('lever', 1)
+    await until(async () => (await invCount('lever')) >= 1, 20000, 'the lever item').catch(() => null)
+    ws.send(JSON.stringify({ t: 'select', x0: pos4.x + 1, y0: pos4.y, z0: pos4.z, x1: pos4.x + 1, y1: pos4.y, z1: pos4.z }))
+    await sleep(400)
+    const fillLever = await post('/api/command', { command: 'sel fill lever' })
+    check('sel fill places the lever', fillLever.body.result.ok === true, fillLever.body.lines.join(' | '))
+    await until(async () => {
+      const r = await get('/api/status')
+      return r.body.task.task === 'idle' ? 'done' : null
+    }, 120000, 'the lever placement').catch(() => null)
+    await post('/api/command', { command: 'sel clear' })
+    const act = await post('/api/command', { command: 'activate lever' })
+    check('activate flips the lever', act.body.result.ok === true, act.body.lines.join(' | '))
+
+    // sleep: a complete bed via /setblock (a bed item's two-cell placement
+    // is its own adventure; the product path under test is walk + sleep),
+    // turn the world to night, sleep, wake
+    const pos5 = (await get('/api/status')).body.position
+    const bx = Math.floor(pos5.x) + 1
+    const bz = Math.floor(pos5.z)
+    const by = Math.floor(pos5.y)
+    await post('/api/command', { command: `say /setblock ${bx} ${by} ${bz} red_bed[part=foot,facing=east]` })
+    await post('/api/command', { command: `say /setblock ${bx + 1} ${by} ${bz} red_bed[part=head,facing=east]` })
+    await sleep(1000)
+    const bedFound = await until(async () => {
+      const r = await post('/api/command', { command: 'find red_bed' })
+      return r.body.result.ok ? r.body : null
+    }, 20000, 'the bed to exist').catch(() => null)
+    check('bed placed via setblock', !!bedFound, bedFound ? bedFound.lines.join(' | ') : 'not found')
+    await post('/api/command', { command: 'say /time set night' })
+    await sleep(1000)
+    const sleepCmd = await post('/api/command', { command: 'sleep' })
+    check('sleep accepted at night', sleepCmd.body.result.ok === true,
+      JSON.stringify(sleepCmd.body.result).slice(0, 160))
+    if (sleepCmd.body.result.ok) {
+      // dawn wakes a sleeper automatically — set the day AFTER asserting
+      // sleep, and accept "not sleeping" from wake as "already up"
+      const wakeCmd = await post('/api/command', { command: 'wake' })
+      const up = wakeCmd.body.result.ok || /not sleeping/.test(wakeCmd.body.result.error || '')
+      check('wake gets the bot up', up, JSON.stringify(wakeCmd.body.result).slice(0, 140))
+      await post('/api/command', { command: 'say /time set day' })
+      await sleep(1000)
+    }
+
+    // 16. the in-game command grammar through the chat path
     const chatCmd = await post('/api/command', { command: 'say hello from minepilot' })
     check('say works', chatCmd.body.result.ok === true)
 
-    // 16. clean shutdown
+    // 17. clean shutdown
     ws.close()
   } finally {
     child.kill('SIGINT')
