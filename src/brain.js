@@ -280,6 +280,11 @@ function createBrain (ctx, hooks) {
     if (!enabled) {
       cancelBusy()
       lastActivity = 'off'
+      // hands the controls back: stop whatever the brain started walking —
+      // a lingering executor keeps its (ref'd) 50ms timer alive, which in
+      // tests holds the node:test child open forever (the ci hang) and in
+      // play leaves the bot wandering after "auto off"
+      try { ctx.pilot.stop() } catch (e) { /* already gone */ }
     } else {
       log('full-auto ON — reflexes, needs and goals take over (#auto off to stop)')
     }
@@ -644,6 +649,10 @@ function createBrain (ctx, hooks) {
     if (tickTimer) clearInterval(tickTimer)
     tickTimer = null
     cancelBusy()
+    // a test or shutdown can end mid-activity — the pilot's executor timer
+    // is a ref'd handle and would hold the process open (and the bot
+    // walking) after the brain is gone
+    try { ctx.pilot.stop() } catch (e) { /* already gone */ }
   }
 
   return { setEnabled, status, tick, start, dispose, noteUserCommand, snapshot, decide }

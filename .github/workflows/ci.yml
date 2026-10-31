@@ -19,7 +19,10 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      - run: npm test
+      # 15-minute cap: a leaked handle in the offline suite would otherwise
+      # hold the node:test child open until the 6h job timeout — fail loudly
+      # with the partial log instead
+      - run: timeout 900 npm test
 
   # live end-to-end against real vanilla servers, one job per Minecraft
   # version: downloads the official server jar from piston-meta, boots a
