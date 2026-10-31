@@ -57,19 +57,25 @@ generate-structures=false
 view-distance=6
 spawn-protection=0
 sync-chunk-writes=false
-motd=botfleet e2e
+motd=minepilot e2e
 max-players=8
+difficulty=peaceful
+spawn-monsters=false
 white-list=false"
   printf '%s\n' "$PROPS" > server.properties
 fi
 
-# minecraft 26.x regenerates server.properties with white-list=true when the
-# key is absent — make sure our value survives regeneration on every boot
-if grep -q '^white-list=' server.properties; then
-  sed -i 's/^white-list=.*/white-list=false/' server.properties
-else
-  echo 'white-list=false' >> server.properties
-fi
+# keep our overrides alive across 26.x property regeneration (26.x resets
+# white-list to true when it rewrites the file; peaceful + no monsters keep
+# the e2e suite deterministic — mobs were killing the bot mid-build)
+for KV in 'white-list=false' 'spawn-monsters=false' 'difficulty=peaceful'; do
+  K="${KV%%=*}"
+  if grep -q "^$K=" server.properties; then
+    sed -i "s/^$K=.*/$KV/" server.properties
+  else
+    echo "$KV" >> server.properties
+  fi
+done
 
 echo "starting server (heap $HEAP, port $PORT, dir $DIR)..."
 exec java -Xms512M -Xmx"$HEAP" -jar server.jar nogui

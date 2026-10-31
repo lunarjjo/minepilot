@@ -232,7 +232,8 @@ function createDefaultSettings () {
 
   // ---- movement -------------------------------------------------------
   s.define('allowBreak', 'bool', true, 'the pathfinder may dig through breakable blocks when it is the cheapest route', 'movement')
-  s.define('allowPlace', 'bool', true, 'the pathfinder may pillar up and bridge gaps using inventory blocks', 'movement')
+  s.define('allowPlace', 'bool', true, 'the pathfinder may bridge gaps using inventory blocks', 'movement')
+  s.define('allowPillar', 'bool', false, 'the pathfinder may pillar straight up by placing blocks below itself. default off on purpose: a headless client cannot verify its own pillar placement ack, and a racy pillar burns inventory climbing its own tower — botfleet shipped pillar opt-in for the same reason', 'movement')
   s.define('allowSprint', 'bool', true, 'sprinting is allowed while walking paths', 'movement')
   s.define('allowParkour', 'bool', false, 'sprint-jump one block gaps (skilled movement, same default as baritone)', 'movement')
   s.define('allowParkourAscend', 'bool', false, 'parkour jumps that gain a block of height', 'movement')

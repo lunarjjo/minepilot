@@ -28,6 +28,10 @@ const STUCK_LIMIT = 6
 const ARRIVE_HORZ = 0.45
 const ARRIVE_VERT = 1.25
 
+// field-diagnosis switch for placement problems: MINEPILOT_DEBUG_PLACE=1
+// prints every placement attempt (kind, planned vs live cell) to stderr
+const PLACE_DEBUG = process.env.MINEPILOT_DEBUG_PLACE === '1'
+
 class Executor extends EventEmitter {
   constructor ({ bot, view, settings, Vec3 }) {
     super()
@@ -257,12 +261,14 @@ class Executor extends EventEmitter {
     if (horz <= ARRIVE_HORZ && vert <= ARRIVE_VERT && settled) return true
 
     // walked past the target: count consecutive worse distances and
-    // forgive the miss (physics rarely lands dead-center; the engine goal
-    // is cell-exact but the process goals are radius-tolerant, so being
-    // within ~2 blocks of the last cell counts as arrival)
+    // forgive the miss (physics rarely lands dead-center). the forgiveness
+    // stays tight on purpose: drops, veins and placements are all reached
+    // from the CELL itself — declaring arrival 2 blocks away made the bot
+    // stop at hole rims forever while the loot sat below (and the loose
+    // margin also let pillar chains spiral). botfleet's numbers, kept.
     if (horz > this.lastDist + 0.01) {
       this.worseTicks++
-      if (this.worseTicks > 5 && horz < 2.2 && vert <= ARRIVE_VERT + 0.5) return true
+      if (this.worseTicks > 8 && horz < 1.6 && vert <= ARRIVE_VERT) return true
     } else {
       this.worseTicks = 0
     }
@@ -390,9 +396,14 @@ class Executor extends EventEmitter {
   async placeFor (m) {
     if (this.placing) return
     this.placing = true
+    const dbg = PLACE_DEBUG
     try {
       const c = m.toPlace[0]
       const bridge = m.placeKind === 'bridge'
+      if (dbg) {
+        const p = this.pos()
+        console.error(`[place] kind=${bridge ? 'bridge' : 'pillar'} plan=(${c.x},${c.y},${c.z}) live=(${p ? Math.floor(p.x) : '?'},${p ? Math.floor(p.y) : '?'},${p ? Math.floor(p.z) : '?'}) idx=${this.index}/${this.queue.length}`)
+      }
       // an explicit ref/face pair (bridge) or the block below (pillar)
       const ref = c.ref ? this.blockAt(c.ref) : this.blockAt({ x: c.x, y: c.y - 1, z: c.z })
       if (!ref) {
@@ -402,7 +413,10 @@ class Executor extends EventEmitter {
       const face = c.face || { x: 0, y: 1, z: 0 }
       const item = await equipForPlace(this.view, this.bot, c.block || null)
       if (!item) {
-        this.emit('log', c.block ? `no ${c.block} left to place` : 'nothing in the inventory to place')
+        // log once per no-material episode, not once per movement tick
+        if (!this.noMaterial) {
+          this.emit('log', c.block ? `no ${c.block} left to place` : 'nothing in the inventory to place')
+        }
         this.noMaterial = true
         this.emit('noMaterial')
         this.bumpPlaceTries()
@@ -416,22 +430,49 @@ class Executor extends EventEmitter {
         await this.bot.placeBlock(ref, new this.Vec3(face.x, face.y, face.z))
         setTimeout(() => this.control('sneak', false), 250)
       } else {
-        // pillar: jump first, place the block where our feet were
+        // pillar: jump, then place into the cell under our CURRENT feet.
+        // the anchor must be the live position, never the plan node — a
+        // stale node makes the server place under our rising body and the
+        // bot skyrockets on its own blocks while every post-check at the
+        // planned cell says "still air" (14 items = a 14-block tower).
+        // the rise window also matters: the server refuses placements
+        // inside the player bbox, so click only after rising >= 1.0 of
+        // the 1.25 jump apex.
         const p0 = this.pos()
         this.control('jump', true)
-        const rose = await this.waitUntil(() => {
-          const p = this.pos()
-          return p && p0 && p.y - p0.y >= 0.6
-        }, 900)
-        if (!rose) {
+        let placed = false
+        try {
+          const rose = await this.waitUntil(() => {
+            const p = this.pos()
+            return p && p0 && p.y - p0.y >= 1.0
+          }, 900)
+          if (rose) {
+            const p = this.pos()
+            const fx = Math.floor(p.x)
+            const fy = Math.floor(p0.y)
+            const fz = Math.floor(p.z)
+            const below = this.blockAt({ x: fx, y: fy - 1, z: fz })
+            if (below) {
+              // a previous attempt may have landed the block even though
+              // its ack raced: the cell being solid is success — placing
+              // again would stack another block and rocket the bot upward
+              if (!this.view.solid(fx, fy, fz)) {
+                try {
+                  await this.bot.placeBlock(below, new this.Vec3(0, 1, 0))
+                } catch (e) {
+                  if (!this.view.solid(fx, fy, fz)) throw e
+                }
+              }
+              placed = this.view.solid(fx, fy, fz)
+            }
+          }
+        } finally {
           this.control('jump', false)
-          this.bumpPlaceTries()
-          return
         }
-        await this.bot.placeBlock(ref, new this.Vec3(face.x, face.y, face.z))
-        this.control('jump', false)
+        if (!placed) this.bumpPlaceTries()
       }
     } catch (e) {
+      if (PLACE_DEBUG) console.error(`[place] FAILED: ${String(e.message || e).slice(0, 120)}`)
       this.emit('log', 'place failed: ' + String(e.message || e).slice(0, 160))
       this.bumpPlaceTries()
     } finally {

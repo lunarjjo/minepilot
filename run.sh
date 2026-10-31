@@ -69,7 +69,11 @@ trap 'cleanup' INT TERM
 start_stack () {
   if port_busy "$PORT"; then die "port $PORT is already in use — stop the other process or set PORT=xxxx ./run.sh"; fi
   c_ok "cockpit starting on http://127.0.0.1:$PORT"
-  PORT="$PORT" "$@" node src/index.js &
+  # env (not a plain prefix) so the quoted VAR=VAL words in "$@" are parsed
+  # as assignments by env itself — a shell prefix would treat them as a
+  # command name and die with 'command not found'. the cockpit reads
+  # APP_PORT, not PORT (see src/config.js).
+  env APP_PORT="$PORT" "$@" node src/index.js &
   STACK_PID=$!
   while kill -0 "$STACK_PID" 2>/dev/null; do sleep 1; done
 }
@@ -83,7 +87,9 @@ fi
 [ "$MODE" = "demo" ] || die "unknown mode '$MODE' — use './run.sh demo', './run.sh connect' or './run.sh console'"
 
 # ---------------------------------------------------------------- java check
-JAVA_MAJOR=$("$JAVA_BIN" -version 2>&1 | head -1 | sed 's/^[^"]*"\([0-9]*\).*/\1/')
+# `|| true` keeps set -e from killing the script before the friendly
+# "java was not found" message below can be printed
+JAVA_MAJOR=$("$JAVA_BIN" -version 2>&1 | head -1 | sed 's/^[^"]*"\([0-9]*\).*/\1/') || true
 if [ -z "${JAVA_MAJOR:-}" ] || [ "$JAVA_MAJOR" -eq 0 ] 2>/dev/null; then
   c_err "demo mode needs java, which was not found."
   c_err "  ubuntu 22/24: sudo apt install openjdk-21-jre-headless   (demo will run minecraft 1.21.8)"
@@ -135,17 +141,20 @@ motd=minepilot demo
 max-players=8
 white-list=false
 spawn-monsters=false
+difficulty=peaceful
 level-type=$MC_LEVEL
-spawn-monsters=false
 PROPS
 fi
-# minecraft 26.x regenerates server.properties with white-list=true when the
-# key is absent — keep our value alive across regenerations
-if grep -q '^white-list=' "$MC_DIR/server.properties"; then
-  sed -i "s/^white-list=.*/white-list=false/" "$MC_DIR/server.properties"
-else
-  printf 'white-list=false\n' >> "$MC_DIR/server.properties"
-fi
+# keep our overrides alive across 26.x property regeneration (26.x resets
+# white-list to true when it rewrites the file; the others are cheap insurance)
+for KV in 'white-list=false' 'spawn-monsters=false' 'difficulty=peaceful'; do
+  K="${KV%%=*}"
+  if grep -q "^$K=" "$MC_DIR/server.properties"; then
+    sed -i "s/^$K=.*/$KV/" "$MC_DIR/server.properties"
+  else
+    printf '%s\n' "$KV" >> "$MC_DIR/server.properties"
+  fi
+done
 if port_busy "$MC_PORT"; then die "port $MC_PORT is already in use — stop the other server or set MC_PORT=xxxx ./run.sh"; fi
 
 # ------------------------------------------------------------- boot the server

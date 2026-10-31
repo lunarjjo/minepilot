@@ -101,7 +101,9 @@ notable deltas:
   client lag; a headless bot has no frames to drop.
 - `elytra*` settings steer the glide controller.
 - minepilot extras: `mapChunkRadius`, `reconnect*`, `autoEat*`,
-  `mineScanRadius`, `veinRadius`, `stuckTimeoutMs`, `logVerbosity`.
+  `mineScanRadius`, `veinRadius`, `stuckTimeoutMs`, `logVerbosity`,
+  `allowPillar` (opt-in: a headless client cannot verify its own pillar
+  placement acks — bridge stays on, pillar does not, see the readme).
 
 settings that cannot exist headless (documented, not silently dropped):
 rendering-thread knobs (`renderPathIgnoreDepth`, line widths — the cockpit

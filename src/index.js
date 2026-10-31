@@ -187,7 +187,16 @@ function main () {
       .then((r) => { if (r && r.ok && r.reply) log(r.reply) })
       .catch((e) => log(`command error: ${String(e.message || e).slice(0, 100)}`))
   })
-  rl.on('close', () => shutdown())
+  // Ctrl-D on a real terminal quits. a closed stdin that was never a tty
+  // (CI runners, nohup, systemd, spawn pipes) must NOT kill the stack —
+  // the cockpit and the bot are services, not the stdin's dependents.
+  rl.on('close', () => {
+    if (process.stdin.isTTY) {
+      shutdown()
+      return
+    }
+    log('stdin closed — the cockpit keeps running (Ctrl-C stops everything)')
+  })
 
   function shutdown () {
     log('shutting down…')

@@ -13,6 +13,15 @@ const { equipForDig } = require('../autotool')
 
 const OWN_COLUMN_EXEMPT = true // never dig the column the bot stands in
 
+// an exposed block has a passable neighbor: its drop will land in open air
+// where the pickup walk can actually reach it
+function isExposed (view, x, y, z) {
+  for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
+    if (view.passable(x + dx, y + dy, z + dz)) return true
+  }
+  return false
+}
+
 // mineflayer item entities carry the marker on `name` or `type` depending
 // on the version — accept both (and the display name) so drops are never
 // invisible to the collector
@@ -32,7 +41,10 @@ function blacklistOf (pilot) {
 }
 
 // nearest wanted block in loaded space, skipping blacklisted cells and the
-// bot's own column. uses bot.findBlocks when the bot provides it (real
+// bot's own column. EXPOSED targets (an air-adjacent face) always win over
+// buried ones at the same distance band: a buried target digs fine but its
+// drop lands in a sealed pocket nothing can reach (the gather that starved
+// the build). uses bot.findBlocks when the bot provides it (real
 // mineflayer), and falls back to a bounded view scan otherwise (fakes).
 function findNearest (pilot, names) {
   const p = pilot.pos()
@@ -43,15 +55,26 @@ function findNearest (pilot, names) {
   const radius = pilot.settings ? pilot.settings.get('mineScanRadius') : 64
   const sameColumn = (x, z) => OWN_COLUMN_EXEMPT && x === myX && z === myZ
 
-  // legitMine: only target blocks with an adjacent air pocket (visible),
-  // the way baritone's legit mode refuses to x-ray
-  const legitVisible = (x, y, z) => {
-    for (const [dx, dy, dz] of [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]) {
-      if (pilot.view.passable(x + dx, y + dy, z + dz)) return true
-    }
-    return false
-  }
+  // exposed first, then distance — see isExposed
+  const exposed = (x, y, z) => isExposed(pilot.view, x, y, z)
+  // legitMine: ONLY exposed targets (visible), the way baritone's legit
+  // mode refuses to x-ray
   const legit = pilot.settings ? pilot.settings.get('legitMine') : false
+
+  const pick = (cands) => {
+    let best = null
+    let bestKey = null
+    for (const f of cands) {
+      if (blacklist.has(f.x + ',' + f.y + ',' + f.z)) continue
+      if (sameColumn(f.x, f.z)) continue
+      const d = (f.x - p.x) ** 2 + (f.y - p.y) ** 2 + (f.z - p.z) ** 2
+      // exposed first, then distance: the key sorts by both
+      const key = (exposed(f.x, f.y, f.z) ? 0 : 1e9) + d
+      if (legit && !exposed(f.x, f.y, f.z)) continue
+      if (bestKey === null || key < bestKey) { bestKey = key; best = f }
+    }
+    return best ? { x: best.x, y: best.y, z: best.z } : null
+  }
 
   if (typeof pilot.bot.findBlocks === 'function') {
     const ids = []
@@ -62,17 +85,9 @@ function findNearest (pilot, names) {
       if (meta) ids.push(meta.id)
     }
     if (ids.length > 0) {
-      const found = pilot.bot.findBlocks({ matching: ids, maxDistance: radius, count: 64 })
-      let best = null
-      let bestD = Infinity
-      for (const f of found || []) {
-        if (blacklist.has(f.x + ',' + f.y + ',' + f.z)) continue
-        if (sameColumn(f.x, f.z)) continue
-        if (legit && !legitVisible(f.x, f.y, f.z)) continue
-        const d = (f.x - p.x) ** 2 + (f.y - p.y) ** 2 + (f.z - p.z) ** 2
-        if (d < bestD) { bestD = d; best = f }
-      }
-      if (best) return { x: best.x, y: best.y, z: best.z }
+      const found = pilot.bot.findBlocks({ matching: ids, maxDistance: radius, count: 64 }) || []
+      const best = pick(found)
+      if (best) return best
     }
   }
 
@@ -82,8 +97,7 @@ function findNearest (pilot, names) {
   const cx = Math.floor(p.x)
   const cy = Math.floor(p.y)
   const cz = Math.floor(p.z)
-  let best = null
-  let bestD = Infinity
+  const cands = []
   for (let dy = -8; dy <= 8; dy++) {
     for (let dx = -R; dx <= R; dx++) {
       for (let dz = -R; dz <= R; dz++) {
@@ -91,18 +105,12 @@ function findNearest (pilot, names) {
         const y = cy + dy
         const z = cz + dz
         if (sameColumn(x, z)) continue
-        if (blacklist.has(x + ',' + y + ',' + z)) continue
         if (!wanted.has(pilot.view.name(x, y, z))) continue
-        if (legit && !legitVisible(x, y, z)) continue
-        const d = dx * dx + dy * dy + dz * dz
-        if (d < bestD) {
-          bestD = d
-          best = { x, y, z }
-        }
+        cands.push({ x, y, z })
       }
     }
   }
-  return best
+  return pick(cands)
 }
 
 // vein mining: after breaking one block, break the adjacent blocks of the
@@ -245,8 +253,34 @@ async function runMine (pilot, names, count, alive) {
       }
     }
     if (!alive()) return { dug, aborted: true }
+    // a buried target digs fine but its drop lands in a sealed pocket no
+    // pickup walk can enter — open the cover blocks above it first, the
+    // way baritone digs through to reach a vein (cap: 2 covers)
+    for (let cover = 0; cover < 2; cover++) {
+      if (isExposed(pilot.view, target.x, target.y, target.z)) break
+      const c = { x: target.x, y: target.y + 1 + cover, z: target.z }
+      if (c.y > target.y + 2) break
+      const name = pilot.view.name(c.x, c.y, c.z)
+      if (!name || pilot.view.passable(c.x, c.y, c.z)) continue
+      if (!pilot.isNearCell(c.x, c.y, c.z, 4.5)) break
+      await pilot.digCell(c)
+    }
     const got = await digVein(pilot, target, alive)
     dug += got
+    if (got === 0) {
+      // the dig ran but nothing broke (occluded cell, server refusal) —
+      // blacklisting stops this round from re-picking the same dead cell
+      if (pilot.settings && pilot.settings.get('blacklistClosestOnFailure')) {
+        blacklist.add(target.x + ',' + target.y + ',' + target.z)
+      }
+      failures++
+      if (failures >= 8) {
+        if (dug === 0) throw new Error(`cannot mine any ${names[0]}`)
+        break
+      }
+      i--
+      continue
+    }
     pilot.emit('progress', { index: dug, total: count })
     if (!pilot.settings || pilot.settings.get('mineScanDroppedItems') !== false) {
       await waitPickup(pilot)

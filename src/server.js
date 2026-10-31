@@ -346,14 +346,25 @@ function createCockpitServer (ctx) {
     setInterval(mapTick, 500)
   ]
 
-  // chat + waypoints + selection events from the bot side
+  // chat + waypoints + selection events from the bot side.
+  // two lifetimes are wired here, with different rules:
+  //   bot-level listeners — the SAME bot object survives respawn, so they
+  //     are guarded by a WeakSet (re-registering would stack death/chat
+  //     listeners until the EventEmitter warning fires — seen at 11 deaths).
+  //   pilot-level listeners — the autopilot is re-created on every spawn,
+  //     so these must be (re)wired on every call.
+  const wiredBots = new WeakSet()
+  const pushWaypoints = () => broadcast({ t: 'waypoints', waypoints: waypoints.list() })
   function wireBot (bot) {
     if (!bot || !bot.on) return
-    bot.on('chat', (username, message) => {
-      broadcast({ t: 'chat', from: username, text: String(message) })
-    })
-    const pushWaypoints = () => broadcast({ t: 'waypoints', waypoints: waypoints.list() })
-    bot.on('death', pushWaypoints)
+    if (!wiredBots.has(bot)) {
+      wiredBots.add(bot)
+      bot.on('chat', (username, message) => {
+        broadcast({ t: 'chat', from: username, text: String(message) })
+      })
+      bot.on('death', pushWaypoints)
+      bot.once('end', () => wiredBots.delete(bot))
+    }
     if (ctx.pilot) {
       ctx.pilot.on('selection', () => broadcast({ t: 'selection', selection: selection.snapshot() }))
       ctx.pilot.on('log', (text) => broadcast({ t: 'log', text }))

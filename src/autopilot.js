@@ -47,7 +47,7 @@ const CHUNK_LOAD_WAIT_MS = 1200
 // falls back to the engine default. this mapping is the entire glue
 // between "baritone setting names" and "the pathfinder's knobs".
 const ENGINE_KEYS = [
-  'allowBreak', 'allowPlace', 'allowParkour', 'allowParkourAscend',
+  'allowBreak', 'allowPlace', 'allowPillar', 'allowParkour', 'allowParkourAscend',
   'allowWater', 'allowFallDamage', 'allowSprint',
   'allowDiagonalAscend', 'allowDiagonalDescend',
   'maxFallNoDamage', 'maxFallWithDamage', 'maxWaterLanding',
@@ -126,7 +126,10 @@ class Autopilot extends EventEmitter {
   }
 
   onNoMaterial () {
-    if (this.activeJob !== 0) return
+    // the builder manages its own material errors (it places intentionally);
+    // every other job and plain movement degrades to no-place planning so a
+    // blockless inventory cannot turn into an endless pillar/replan loop
+    if (this.activeProcessName === 'build') return
     if (this.task === 'idle' || this.task === 'follow') return
     if (!this.s.allowPlace) return // already degraded for this task
     this.s.allowPlace = false
@@ -627,6 +630,7 @@ class Autopilot extends EventEmitter {
 
   mine (names, count) {
     this.stopFollowTimer()
+    if (this.paused) this.resumeInternal() // runJob does this for every other process
     this.task = 'mine'
     this.goalLabel = `mine ${names.join(' ')} x${count}`
     this.consecutiveFails = 0
@@ -665,6 +669,12 @@ class Autopilot extends EventEmitter {
 
   build (blueprint, origin) {
     const o = origin || this.anchorHere()
+    // a caller-resolved origin may carry y=null (2-coord form) — pin it to
+    // the feet level now, before null arithmetic floats the build at y=0
+    if (o && (o.y === null || o.y === undefined)) {
+      const p = this.pos()
+      o.y = p ? Math.floor(p.y) : 0
+    }
     this.startJob('build', `build ${blueprint.name}`, (alive) => runBuilder(this, blueprint, o, alive))
     return { ok: true, reply: `building ${blueprint.name} (${blueprint.placements.length} cells)` }
   }

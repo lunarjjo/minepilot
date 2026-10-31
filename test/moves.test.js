@@ -212,13 +212,16 @@ test('moves: parkour is generated only when opted in', () => {
   assert.strictEqual(jump.to.y, 64)
 })
 
-test('moves: pillar appears only with allowPlace', () => {
+test('moves: pillar is opt-in via allowPillar', () => {
   const w = flat()
   const v = viewOf(w)
-  const off = generate(v, { x: 0, y: 64, z: 0 }, Object.assign({}, DEFAULTS, { allowPlace: false }))
+  // default: no pillar (a headless placement ack is racy — see settings.js)
+  const def = generate(v, { x: 0, y: 64, z: 0 }, Object.assign({}, DEFAULTS))
+  assert.ok(!def.find((m) => m.type === 'pillar'), 'no pillar by default')
+  const off = generate(v, { x: 0, y: 64, z: 0 }, Object.assign({}, DEFAULTS, { allowPillar: false, allowPlace: false }))
   assert.ok(!off.find((m) => m.type === 'pillar'))
-  // allowPlace now defaults to true (baritone parity): pillar by default
-  const on = generate(v, { x: 0, y: 64, z: 0 }, DEFAULTS)
+  // opt in: the pillar move appears and places into the feet cell
+  const on = generate(v, { x: 0, y: 64, z: 0 }, Object.assign({}, DEFAULTS, { allowPillar: true }))
   const p = on.find((m) => m.type === 'pillar')
   assert.ok(p)
   assert.strictEqual(p.to.y, 65)

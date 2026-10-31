@@ -116,21 +116,29 @@ async function doPlace (pilot, cell, blockName) {
 
   const anchors = anchorsFor(pilot.view, cell)
   if (anchors.length === 0) return false // nothing to click against yet
-  const anchor = anchors[0]
 
-  await pilot.equipItem(item)
-  const ref = pilot.botBlockAt(anchor.ref)
-  if (!ref) return false
-  await pilot.lookAtCell(anchor.ref.x, anchor.ref.y, anchor.ref.z)
-  try {
-    await pilot.placeRefFace(ref, anchor.face)
-  } catch (e) {
-    pilot.emit('log', `place refused: ${String(e.message || e).slice(0, 160)}`)
-    return false
+  // try the anchors in order (up face first): a refused placement means the
+  // server's raycast clicked a different face than we intended — usually in
+  // broken-up terrain where the first anchor is occluded. a human would
+  // re-click from another side; so does the builder.
+  for (const anchor of anchors.slice(0, 3)) {
+    const item2 = pilot.hasItem(blockName)
+    if (!item2) throw new Error(`out of material: ${blockName}`)
+    const ref = pilot.botBlockAt(anchor.ref)
+    if (!ref) continue
+    await pilot.equipItem(item2)
+    await pilot.lookAtCell(anchor.ref.x, anchor.ref.y, anchor.ref.z)
+    try {
+      await pilot.placeRefFace(ref, anchor.face)
+    } catch (e) {
+      pilot.emit('log', `place refused: ${String(e.message || e).slice(0, 160)}`)
+      await sleep(150)
+      continue
+    }
+    const after = worldName(pilot, cell.x, cell.y, cell.z)
+    if (after === blockName) return true
   }
-  const after = worldName(pilot, cell.x, cell.y, cell.z)
-  if (after !== blockName) return false
-  return true
+  return false
 }
 
 // run the build to completion. returns { placed } — how many blueprint
@@ -171,7 +179,14 @@ async function runBuilder (pilot, bp, origin, alive) {
     } else {
       stalls++
       if (stalls >= STALL_LIMIT) {
-        throw new Error(`build stuck: ${tasks.length} cells cannot be served (missing material or no anchor face)`)
+        // fail honestly, and say WHY: the first few unserved cells with
+        // their anchor counts and reach — an operator can act on that
+        const why = tasks.slice(0, 3).map((t) => {
+          if (t.kind === 'dig') return `dig(${t.x},${t.y},${t.z})`
+          const a = anchorsFor(pilot.view, t)
+          return `place(${t.x},${t.y},${t.z} ${t.block}) anchors=${a.length} reach=${withinReach(pilot, t)} have=${!!pilot.hasItem(t.block)}`
+        }).join('; ')
+        throw new Error(`build stuck: ${tasks.length} cells cannot be served [${why}]`)
       }
       await sleep(250)
     }

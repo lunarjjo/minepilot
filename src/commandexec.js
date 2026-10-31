@@ -636,7 +636,11 @@ async function dispatchCommand (name, args, ctx, refs) {
         const n = node()
         origin = {
           x: resolveCoord(args.origin.x, n.x),
-          y: resolveCoord(args.origin.y, n.y),
+          // "build <schem> <x> <z>" (no y) anchors on the bot's feet level,
+          // like baritone — resolveCoord(null) must not leak into the
+          // builder as null (null + offset coerces to 0 and the build
+          // floats at y=0 with no anchor faces)
+          y: args.origin.y == null ? n.y : resolveCoord(args.origin.y, n.y),
           z: resolveCoord(args.origin.z, n.z)
         }
       }

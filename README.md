@@ -132,7 +132,7 @@ ships a version natively, the vendored copy is skipped entirely.
 ## testing
 
 ```bash
-npm test          # 122 offline tests: engine, grammar, processes, cockpit
+npm test          # 126 offline tests: engine, grammar, processes, cockpit
 npm run test:live # live e2e against a running vanilla server
 ```
 
@@ -144,15 +144,11 @@ gather-and-build cycle.
 
 ## known issues
 
-- **live-server build cycle is best-effort**: the builder's logic is fully
-  covered by the offline suite (world diff, dig/place ordering, anchors,
-  stall handling — 126 tests), but on a live vanilla server a *refused*
-  placement racing a hotbar swap can desync mineflayer's window cache and
-  lose the carried stack mid-build. the live e2e therefore reports the
-  gather-and-build outcome without gating CI on it; mining, excavating,
-  tunneling, goto, waypoints and the whole cockpit protocol are all
-  hard-required and green. a proper fix wants a cursor-safe equip wrapper
-  upstream.
+- **pillar is opt-in** (`allowPillar`, default off): a headless client
+  cannot reliably verify its own pillar placement ack, and a racy pillar
+  burns inventory climbing its own tower. bridge (ground-anchored, sneak)
+  stays on by default; pit walls are climbed by digging unless you flip
+  the setting. botfleet shipped pillar opt-in for the same reason.
 - **elytra** is a glide controller (see the parity doc), not a trajectory
   search.
 

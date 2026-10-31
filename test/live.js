@@ -191,20 +191,27 @@ async function main () {
 
     // 13. gather + build cycle (drops scatter, so gather a surplus and retry).
     // CI always runs it; MINEPILOT_LIVE_FAST=1 skips it for quick local runs.
+    // the build anchors on the bot's feet level, so the bot first walks to
+    // the build column — fresh surface, not the bottom of a dig pit.
     let built = null
     if (process.env.MINEPILOT_LIVE_FAST === '1') {
       check('gather+build cycle (skipped in fast mode)', true)
     } else {
     for (let attempt = 1; attempt <= 3 && !built; attempt++) {
-      await post('/api/command', { command: 'mine dirt 14' })
+      await post('/api/command', { command: 'mine dirt 20' })
       await until(async () => {
         const r = await get('/api/status')
         return r.body.task.task === 'idle' ? 'done' : null
       }, 240000, `the dirt gather (attempt ${attempt})`).catch(() => null)
       const pos = (await get('/api/status')).body.position
-      const bx = pos.x + 4
-      const bz = pos.z + 4
-      await post('/api/command', { command: `build slab ${bx} ${bz}` })
+      const bx = pos.x + 6
+      const bz = pos.z + 6
+      await post('/api/command', { command: `goto ${bx} ${bz}` })
+      await until(async () => {
+        const r = await get('/api/status')
+        return r.body.task.task === 'idle' ? 'done' : null
+      }, 120000, `the walk to the build site (attempt ${attempt})`).catch(() => null)
+      await post('/api/command', { command: `build slab ${bx + 2} ${bz + 2}` })
       built = await until(() => msgs.find((m) => m.t === 'log' && /build complete: 9\/9/.test(m.text)), 240000, `the slab build (attempt ${attempt})`)
         .catch(() => null)
       if (!built) {

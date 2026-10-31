@@ -41,6 +41,7 @@ const DEFAULTS = {
   allowPlace: true, // pillar up / bridge over gaps using inventory blocks
   allowParkour: false, // sprint-jump one block gaps
   allowParkourAscend: false, // parkour jumps that gain height
+  allowPillar: false, // pillar straight up by placing blocks (opt-in: the headless placement ack is racy)
   allowWater: true, // swimming is legal
   allowFallDamage: false, // never take fall damage by default
   allowSprint: true, // sprint while walking
@@ -285,8 +286,9 @@ function generate (view, node, settings) {
       }
     }
 
-    // pillar: jump and place a block beneath yourself (needs inventory)
-    if (s.allowPlace && !inWater && !onLadder) {
+    // pillar: jump and place a block beneath yourself (needs inventory).
+    // opt-in via allowPillar — see settings.js for the why.
+    if (s.allowPlace && s.allowPillar && !inWater && !onLadder) {
       const clear = view.passable(x, y + 1, z) && view.passable(x, y + 2, z)
       if (clear) {
         out.push(movement('pillar', node, { x, y: y + 1, z },

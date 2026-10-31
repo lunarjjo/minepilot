@@ -63,7 +63,7 @@ test('backfill: fills recorded holes with throwaway blocks', { timeout: 30000 },
   bot.disposePhysics()
 })
 
-test('mine: legitMine refuses buried ores, accepts exposed ones', () => {
+test('mine: exposed targets win, buried ones stay x-ray-visible', () => {
   const s = createDefaultSettings()
   const w = world()
   // a buried ore (no adjacent air) and an exposed one at the surface
@@ -73,14 +73,19 @@ test('mine: legitMine refuses buried ores, accepts exposed ones', () => {
 
   s.set('legitMine', false)
   const any = findNearest(pilot, ['diamond_ore'])
-  assert.ok(any, 'x-ray mode sees the buried ore')
-  assert.strictEqual(any.x, 2)
-  assert.strictEqual(any.y, 60)
+  assert.ok(any, 'x-ray mode sees the ores')
+  assert.strictEqual(any.x, 5, 'the exposed ore wins: its drop lands where the pickup walk can reach')
+  assert.strictEqual(any.y, 63)
+
+  // with no exposed candidate left, the buried ore is still selectable
+  w.removeBlock(5, 63, 5)
+  const buried = findNearest(pilot, ['diamond_ore'])
+  assert.ok(buried, 'buried ore remains x-ray-visible when nothing is exposed')
+  assert.strictEqual(buried.x, 2)
+  assert.strictEqual(buried.y, 60)
 
   s.set('legitMine', true)
   const legit = findNearest(pilot, ['diamond_ore'])
-  assert.ok(legit, 'the exposed surface ore is visible')
-  assert.strictEqual(legit.x, 5)
-  assert.strictEqual(legit.y, 63)
+  assert.strictEqual(legit, null, 'legitMine refuses the buried ore')
   bot.disposePhysics()
 })
