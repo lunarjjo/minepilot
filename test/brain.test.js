@@ -186,17 +186,19 @@ test('full-auto progression: logs to stone tools against the fake world', async 
   brain.setEnabled(true)
   const has = (name) => (bot.inventory.items().find((i) => i.name === name) || {}).count || 0
 
-  // drive the brain manually: each tick is one decision cycle (mining
-  // waits make each tick take seconds). the 400s budget covers a slow
-  // 2-core ci runner: a throw before dispose() leaves the executor's
-  // ref'd timer alive, which holds the node:test child open forever —
-  // the ci hang was exactly a failed assert skipping the cleanup
+  // drive the brain manually: the tick loop is fire-and-forget (reflexes
+  // keep ticking while activities run in the background), so the budget
+  // is WALL TIME, not iterations — the activities need real seconds to
+  // mine and craft. the 300s budget covers a slow 2-core ci runner: a
+  // throw before dispose() leaves the executor's ref'd timer alive, which
+  // holds the node:test child open forever — the ci hang was exactly a
+  // failed assert skipping the cleanup
   let ticks = 0
   const t0 = Date.now()
   try {
-    while (ticks < 900 && Date.now() - t0 < 400000) {
+    while (Date.now() - t0 < 300000) {
       await brain.tick()
-      await sleep(60)
+      await sleep(250)
       ticks++
       if (has('stone_pickaxe') > 0 && has('torch') > 0) break
     }
@@ -265,5 +267,57 @@ test('auto command round-trips through the executor', async () => {
   const off = await executeCommand('auto off', cctx)
   assert.equal(off.ok, true)
   assert.equal(brain.status().on, false)
+  brain.dispose()
+})
+
+test('brain: a disconnect suspends but never kills the brain', async () => {
+  const { ctx, brain } = makeStack()
+  const { executeCommand } = require('../src/commandexec')
+  const cctx = { ...ctx, reply: () => {}, source: 'console' }
+  await executeCommand('auto on', cctx)
+  assert.equal(brain.status().on, true)
+  // the bot session ends (kick, server restart, wifi blip) — index.js
+  // used to call brain.dispose() here, permanently flipping `disposed`;
+  // the reconnect respawn then showed full-auto ON while never ticking
+  brain.suspend()
+  // a fresh bot appears (the respawn) and full-auto re-enables
+  const bot2 = new FakeBot({ username: 'BrainBot', version: '1.21.4' }, ctx.bot.world)
+  bot2.spawnAt(0.5, 62, 0.5)
+  ctx.bot = bot2
+  const pilot2 = new Autopilot({ bot: bot2, deps: { Vec3 }, settings: ctx.settings })
+  ctx.pilot = pilot2
+  brain.setEnabled(true)
+  // the brain must still tick and decide — one manual tick proves the
+  // permanent-death regression is gone
+  await brain.tick()
+  assert.equal(brain.status().on, true, 'still enabled after suspend + respawn')
+  assert.notEqual(brain.status().activity, 'off', 'a live brain reports an activity')
+  bot2.disposePhysics()
+  pilot2.dispose()
+  brain.dispose()
+})
+
+test('brain: the movement watchdog restarts a wedged activity', { timeout: 30000 }, async () => {
+  const { ctx, brain, logs } = makeStack()
+  // a short window: the test needs the trip, not the wait
+  ctx.settings.set('autoWatchdogMs', 2000)
+  brain.setEnabled(true)
+  // stub the gather driver: it claims a task and never finishes, and the
+  // bot never moves — exactly the wedged state the watchdog exists for
+  ctx.pilot.mine = () => {
+    ctx.pilot.task = 'mine'
+    ctx.pilot.executor.running = true
+    return { ok: true }
+  }
+  // tick 1 starts the (stubbed) gather; tick 2 primes the movement
+  // baseline inside the busy branch; tick 3 trips the window
+  await brain.tick()
+  await brain.tick()
+  await sleep(2600)
+  await brain.tick()
+  assert.ok(logs.some((l) => /no movement/.test(l)), `watchdog logged a restart: ${logs.slice(-3).join(' | ')}`)
+  assert.equal(ctx.pilot.task, 'idle', 'the wedged task was stopped')
+  // and the brain is free to decide again afterwards
+  assert.equal(brain.status().on, true)
   brain.dispose()
 })

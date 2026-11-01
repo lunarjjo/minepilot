@@ -74,6 +74,24 @@ function blockInRange (bot, names, maxDistance) {
   } catch (e) { return false }
 }
 
+// findBlocks scans loaded chunks synchronously — five of them every tick
+// is real CPU on a live server, and the answers barely change second to
+// second. a 5s memo keeps the now-always-ticking brain cheap.
+const rangeMemo = new WeakMap() // bot -> { t, hits: Map }
+function blockInRangeCached (bot, names, maxDistance) {
+  const now = Date.now()
+  let m = rangeMemo.get(bot)
+  if (!m || now - m.t > 5000) {
+    m = { t: now, hits: new Map() }
+    rangeMemo.set(bot, m)
+  }
+  const key = names.join(',') + '|' + (maxDistance || 48)
+  if (m.hits.has(key)) return m.hits.get(key)
+  const v = blockInRange(bot, names, maxDistance)
+  m.hits.set(key, v)
+  return v
+}
+
 // ---------------------------------------------------------------- decide
 // PURE: everything the brain knows, distilled into the next activity.
 // unit-tested against hand-built snapshots.
@@ -131,11 +149,11 @@ function snapshot (bot, pilot) {
     creeperNear: hostiles.some((h) => /creeper/.test(h.name) && h.d < CREEPER_RADIUS),
     hostileNear: hostiles.length > 0 ? hostiles[0] : null,
     animalNear: animals.length > 0 ? animals[0] : null,
-    tableInRange: blockInRange(bot, ['crafting_table'], 32),
-    furnaceInRange: blockInRange(bot, ['furnace', 'blast_furnace'], 32),
-    stoneInRange: blockInRange(bot, STONES, 48),
-    ironInRange: blockInRange(bot, IRON_ORES, 48),
-    coalInRange: blockInRange(bot, ['coal_ore', 'deepslate_coal_ore'], 48)
+    tableInRange: blockInRangeCached(bot, ['crafting_table'], 32),
+    furnaceInRange: blockInRangeCached(bot, ['furnace', 'blast_furnace'], 32),
+    stoneInRange: blockInRangeCached(bot, STONES, 48),
+    ironInRange: blockInRangeCached(bot, IRON_ORES, 48),
+    coalInRange: blockInRangeCached(bot, ['coal_ore', 'deepslate_coal_ore'], 48)
   }
   return snap
 }
@@ -273,6 +291,21 @@ function createBrain (ctx, hooks) {
   function noteUserCommand () {
     if (!enabled) return
     userHoldUntil = Date.now() + USER_HOLD_MS
+  }
+
+  // a disconnect is NOT the end of the brain. the session reconnects and
+  // respawns the bot, and full-auto must pick up where it left off — but
+  // the activity it was driving belongs to a bot that no longer exists.
+  // suspend cancels the activity without disposing the instance: the old
+  // bug called dispose() on every 'end', which set the permanent `disposed`
+  // flag — after ONE disconnect (kick, server restart, wifi blip) the
+  // cockpit still showed full-auto ON while the brain never ticked again.
+  // the bot stood perfectly still, "full auto tidak berfungsi".
+  function suspend () {
+    cancelBusy()
+    lastActivity = 'off'
+    lastStateKey = null
+    sameState = 0
   }
 
   function setEnabled (on) {
@@ -474,6 +507,21 @@ function createBrain (ctx, hooks) {
     lastActivity = activity.kind
     const isCurrent = () => busy && busy.kind === activity.kind
 
+    // the activity owns its own completion: busy is cleared HERE, in the
+    // finally, so the tick loop can fire-and-forget this promise and keep
+    // ticking (reflexes, interrupts and the watchdog) while it runs
+    try {
+      await executeInner(activity, isCurrent)
+    } catch (e) {
+      log(`auto: ${activity.kind} error — ${String(e.message || e).slice(0, 80)}`)
+    } finally {
+      if (busy && busy.kind === activity.kind) busy = null
+    }
+  }
+
+  async function executeInner (activity, isCurrent) {
+    const { bot, pilot } = ctx
+
     if (activity.kind === 'eat') {
       const r = await require('./inventory').eatOnce(bot)
       if (r.ok) log(`auto: ${r.reply}`)
@@ -570,6 +618,34 @@ function createBrain (ctx, hooks) {
   const taboos = new Map() // kind(+item/block) -> until-ms
   let lastStateKey = null
   let sameState = 0
+  // the movement watchdog: a busy brain whose bot has not moved a single
+  // block for a while is wedged (a pathing loop, a stuck executor, a
+  // process waiting on something that will never come). restarting the
+  // activity — and tabooing it briefly — is the difference between "the
+  // bot is thinking" and "the bot does not move".
+  const watchdogMs = () => (ctx.settings ? Number(ctx.settings.get('autoWatchdogMs')) || 20000 : 20000)
+  let lastWatchdogPos = null
+  let lastWatchdogMove = 0
+  function watchdogTrip (bot) {
+    const p = bot.entity && bot.entity.position
+    if (!p) return false
+    const moved = lastWatchdogPos
+      ? Math.abs(p.x - lastWatchdogPos.x) + Math.abs(p.y - lastWatchdogPos.y) + Math.abs(p.z - lastWatchdogPos.z)
+      : Infinity
+    if (moved > 1.5) {
+      lastWatchdogPos = { x: p.x, y: p.y, z: p.z }
+      lastWatchdogMove = Date.now()
+      return false
+    }
+    return Date.now() - lastWatchdogMove > watchdogMs()
+  }
+  function noteMovement (bot) {
+    const p = bot.entity && bot.entity.position
+    if (p) {
+      lastWatchdogPos = { x: p.x, y: p.y, z: p.z }
+      lastWatchdogMove = Date.now()
+    }
+  }
   async function tick () {
     if (!enabled || disposed || ticking || !ctx.bot || !ctx.pilot) return
     ticking = true
@@ -577,6 +653,22 @@ function createBrain (ctx, hooks) {
       // a running activity keeps the floor unless a reflex interrupts
       const snap = snapshot(ctx.bot, ctx.pilot)
       if (busy) {
+        // a bot that is actively digging or placing is WORKING, not stuck —
+        // watch for a wedged driver only when the pilot claims a task but
+        // nothing is moving and nothing is being worked on
+        let working = false
+        try {
+          working = !!(ctx.pilot.executor && (ctx.pilot.executor.digging || ctx.pilot.executor.placing))
+        } catch (e) { /* no executor */ }
+        const taskStuck = ctx.pilot.task && ctx.pilot.task !== 'idle' && !working
+        if (watchdogTrip(ctx.bot) && taskStuck) {
+          log(`auto: no movement for ${Math.round(watchdogMs() / 1000)}s — restarting the activity`)
+          if (busy.kind) taboos.set(busy.kind + (busy.item ? ':' + busy.item : ''), Date.now() + 30000)
+          cancelBusy()
+          try { ctx.pilot.stop() } catch (e) { /* ignore */ }
+          noteMovement(ctx.bot)
+          return
+        }
         if (Date.now() - busy.startedAt > 240000) {
           log(`auto: ${busy.kind} took too long — dropping it`)
           cancelBusy()
@@ -626,13 +718,13 @@ function createBrain (ctx, hooks) {
       }
       busy = { kind: activity.kind, reason: activity.reason, startedAt: Date.now(), cancel: null }
       if (!activity.urgent) log(`auto: ${activity.reason}`)
-      try {
-        await execute(activity)
-      } catch (e) {
-        log(`auto: ${activity.kind} error — ${String(e.message || e).slice(0, 80)}`)
-      } finally {
-        if (busy && busy.kind === activity.kind) busy = null
-      }
+      // fire-and-forget: the activity runs in the background and clears
+      // its own busy flag when done. awaiting it here would hold the
+      // `ticking` guard for the WHOLE activity (gather waits up to 180s),
+      // and the tick loop — reflexes, interrupts, the watchdog — would
+      // never fire mid-activity. this was the structural reason "reflexes
+      // keep running regardless" was only true while the bot was idle.
+      execute(activity).catch(() => { /* execute never rejects */ })
     } finally {
       ticking = false
     }
@@ -655,7 +747,7 @@ function createBrain (ctx, hooks) {
     try { ctx.pilot.stop() } catch (e) { /* already gone */ }
   }
 
-  return { setEnabled, status, tick, start, dispose, noteUserCommand, snapshot, decide }
+  return { setEnabled, suspend, status, tick, start, dispose, noteUserCommand, snapshot, decide }
 }
 
 module.exports = { createBrain, snapshot, decide, HOSTILE_RE, ANIMAL_RE, LOGS, PLANKS, RAW_FOOD }

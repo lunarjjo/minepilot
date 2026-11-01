@@ -253,6 +253,41 @@ async function runMine (pilot, names, count, alive) {
       }
     }
     if (!alive()) return { dug, aborted: true }
+    // never dig the column we are STANDING in — the floor is load
+    // bearing. the approach goal (radius 1) legally lands the bot on top
+    // of a shallow vein; digging it out from under our own feet drops
+    // the bot into the hole and every following ascend launches from
+    // mid-air (the infinite jump-bounce). step aside one cell first.
+    {
+      const p = pilot.pos()
+      if (p && Math.floor(p.x) === target.x && Math.floor(p.z) === target.z) {
+        let stepped = false
+        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const sx = target.x + dx
+          const sz = target.z + dz
+          const r = pilot.driveTo(new GoalNear(sx, Math.floor(p.y), sz, 0))
+          if (r && (r.status === 'found' || r.status === 'partial')) {
+            if (r.moves && r.moves.length > 0) await pilot.waitArrival(15000)
+            const p2 = pilot.pos()
+            if (p2 && (Math.floor(p2.x) !== target.x || Math.floor(p2.z) !== target.z)) {
+              stepped = true
+              break
+            }
+          }
+        }
+        if (!stepped) {
+          blacklist.add(target.x + ',' + target.y + ',' + target.z)
+          pilot.emit('log', `skipping ${names[0]} under our own feet — no room to step aside`)
+          failures++
+          if (failures >= 8) {
+            if (dug === 0) throw new Error(`cannot mine any ${names[0]}`)
+            break
+          }
+          i--
+          continue
+        }
+      }
+    }
     // a buried target digs fine but its drop lands in a sealed pocket no
     // pickup walk can enter — open the cover blocks above it first, the
     // way baritone digs through to reach a vein (cap: 2 covers)

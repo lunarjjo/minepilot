@@ -121,7 +121,12 @@ function main () {
       if (ctx.stations) {
         try { ctx.stations.reset() } catch (e) { /* ignore */ }
       }
-      try { brain.dispose() } catch (e) { /* ignore */ }
+      // SUSPEND, never dispose: the session reconnects with backoff and
+      // the brain must survive it. dispose() flips a permanent flag — one
+      // disconnect and full-auto was dead for the rest of the process
+      // while the cockpit kept reporting it ON (the "bot does not move"
+      // report). onSpawn re-enables it and it just keeps going.
+      try { brain.suspend() } catch (e) { /* ignore */ }
       if (chat) {
         try { chat.dispose() } catch (e) { /* ignore */ }
         chat = null
@@ -217,6 +222,7 @@ function main () {
     if (pilot) {
       try { pilot.stop() } catch (e) { /* ignore */ }
     }
+    try { brain.dispose() } catch (e) { /* ignore */ }
     session.stop()
     waypoints.save()
     process.exit(0)
