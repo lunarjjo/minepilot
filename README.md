@@ -19,6 +19,14 @@ explore, tunnel, elytra glide, waypoints, selections, backfill — the
 works. The full parity ledger lives in
 [docs/baritone-parity.md](docs/baritone-parity.md).
 
+the movement engine itself is **baritone's playbook, written in
+javascript from scratch** — see the [credits](#credits) section. it plans
+straight runs it can sprint-jump at ~7 blocks/s, tunnels through walls
+when the carried tools make that the cheap route, pillars and staircases
+up cliffs, bridges gaps one placed block at a time, and digs straight
+down to reach goals below it — all in one A* pass that prices every
+break and placement before committing.
+
 and when you want the bot to just play: flip `#auto on` and the survival
 brain takes over — reflexes, needs and goals, from punching the first
 tree to cooking dinner in a furnace it crafted itself.
@@ -129,6 +137,11 @@ suspends its goals for a hold window; the reflexes stay on for safety.
 a decision that goes nowhere gets a 90-second cooldown, so the loop
 cannot spin. `auto off` hands it back.
 
+disconnects don't kill it: a kick, a server restart, a wifi blip — the
+session reconnects, the brain suspends and resumes, and full-auto picks
+up where it left off. a watchdog restarts any activity that claims a
+task but stops moving (and isn't digging or placing) for 20 seconds.
+
 ## architecture
 
 ```
@@ -190,16 +203,47 @@ from zero inventory to a furnace-cooked dinner under full-auto.
 
 ## known issues
 
-- **pillar is opt-in** (`allowPillar`, default off): a headless client
-  cannot reliably verify its own pillar placement ack, and a racy pillar
-  burns inventory climbing its own tower. bridge (ground-anchored, sneak)
-  stays on by default; pit walls are climbed by digging unless you flip
-  the setting. botfleet shipped pillar opt-in for the same reason.
 - **elytra** is a glide controller (see the parity doc), not a trajectory
   search.
 - the full-auto brain is a survival generalist, not a speedrunner: it
   plays safely (flee thresholds, wood margins) and its progression is
   gated by what the world actually offers nearby.
+- chained pillars occasionally race the placement ack on high-latency
+  servers — the executor verifies each placement, stumbles, splices and
+  re-plans, so it costs seconds, not the task.
+
+## credits
+
+**[baritone](https://github.com/cabaletta/baritone)** by
+[cabaletta](https://github.com/cabaletta) and contributors, LGPL-3.0 —
+the pathfinding system this project's movement engine is modeled on.
+minepilot is an independent javascript implementation: no baritone code
+was copied (licensing would not allow it into an MIT repo), but the
+approach is deliberately, visibly theirs, and this project would not
+exist without it. specific ideas carried over, adapted and credited in
+the code comments where they live:
+
+- the movement model — A* over standing positions where every legal
+  minecraft action (traverse, ascend, descend, fall, swim, climb,
+  parkour, pillar, bridge) is an edge with a realistic cost
+- the cost constants — walking priced at sprint pace so the heuristic
+  never overestimates a sprintable route (their `COST_HEURISTIC`, our
+  `SPRINT_FACTOR`), walking off an edge cheaper than walking a block
+  (`WALK_OFF_BLOCK_COST`), a flat penalty on every block break
+  (`BLOCK_BREAK_ADDITIONAL_PENALTY`)
+- dig costs priced with the tools the player actually carries
+  (autoTool as a planning input, not just an equip)
+- the goal system — GoalBlock / GoalNear / GoalXZ / GoalRunAway /
+  GoalInverted / GoalTwoBlocks and the composites
+- the executor behavior — segment merging with sprint, sprint-jumping
+  flat straights, digging what is in the way, placing what is missing,
+  splicing into a replan when the world changes under the plan
+- the process set and command grammar — #goto, #mine, #follow, #thisway,
+  #eta, and the rest of the vocabulary in
+  [docs/baritone-parity.md](docs/baritone-parity.md)
+
+if baritone's movement quality is the bar, standing on their shoulders
+is how this project reaches for it.
 
 ## license
 

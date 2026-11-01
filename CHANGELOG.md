@@ -1,5 +1,69 @@
 # changelog
 
+## 0.3.0 — the baritone-grade movement overhaul
+
+field reports drive this one: the bot got stuck, free-fell, took wrong
+routes, could not climb, dug with bare hands mid-path, and full-auto
+sometimes just stood there. every report traced to real bugs, and each
+fix carries a regression test:
+
+- **chained placements were unplannable** — the A\\* searched the world
+  as-is, but a bridge's support block only exists after the placement,
+  so every plan ended after ONE placed block and the executor replanned
+  per block forever. movements now mark their destination
+  `placedSupport` and the search chains bridges, pillars and staircases
+  in a single pass: a 9-bridge crossing is one plan.
+- **the lookahead validator doomed chains** — it regenerated the full
+  movement list from a planned node, and a chained bridge's successor
+  "never existed" until its predecessor placed. bridging replanned
+  forever without placing anything. `validateMove()` now checks what
+  executing the move in order actually needs — cheaply, every other
+  tick.
+- **digs are tool-priced and tool-swung** — the planner priced every
+  break with bare hands (a pickaxe divides stone cost by 6), so it
+  detoured around walls it should have tunneled through; and the
+  executor never equipped a tool mid-path, mining stone at 7.5 seconds
+  a block by hand. costs use the carried tools; every dig equips the
+  best one.
+- **the executor drives like baritone** — collinear segments merge into
+  one steer target (no more per-cell control stutter), sprint engages
+  on straight runs, sprint-jump bunny-hops flat straights (~7 blocks/s
+  on flat ground, live-measured), and passing a node advances instead
+  of orbiting back to it. goal heuristics are priced at sprint pace so
+  A\\* stops dismissing the fast routes.
+- **vertical mobility** — diagonalAscend implemented (the setting
+  existed but did nothing), ascendPlace staircases up broken terrain,
+  digFall digs straight down one block per break with zero fall damage,
+  bridging covers drops deeper than the no-damage budget, and pillar is
+  on by default now that placements are verified (the rocket-tower
+  failure mode is gone).
+- **full-auto survives disconnects** — `bot.on('end')` used to call
+  `brain.dispose()` (a permanent flag): ONE kick, restart or wifi blip
+  and the brain was dead for the rest of the process while the cockpit
+  kept reporting it ON. disconnects now suspend; the reconnect resumes.
+- **reflexes actually interrupt now** — the tick loop held its guard
+  across whole activities (gather waits up to 180s), so the busy branch
+  never ran while the bot was busy. activities run fire-and-forget and
+  the loop keeps ticking; findBlocks probes go through a 5s memo.
+- **a movement watchdog** (`autoWatchdogMs`, 20s) — a claimed task with
+  zero movement and zero dig/place work gets restarted and briefly
+  tabooed. "the bot does not move" becomes "the bot retries".
+- **mine steps aside before digging a vein under its own feet** — the
+  approach goal legally landed the bot on top of shallow veins, and
+  digging the floor out from under itself dropped the bot into its own
+  hole with every following ascend launching from mid-air (the infinite
+  jump-bounce).
+- planning runs against a CachedView snapshot; long plans stop dying at
+  the wall-clock budget. dig timeouts dropped 20s → 8s with one
+  re-look/retry before splicing.
+
+verification: 163/163 offline (the kinematic fake grew bridge-chain,
+tool-equip, sprint, digFall and brain-lifecycle regressions) and a new
+focused live suite — 15/15 against a real vanilla 1.21.8 server:
+60 blocks in 8.8s (walk pace is 14s), an 8-wide trench crossed on
+placed blocks, a 3-high hill climbed, a shaft dug to bedrock, and
+full-auto verified alive after a same-name kick forced a reconnect.
+
 ## 0.2.0 — workstations, world interactions and the full-auto brain
 
 the cockpit stops being a command line with a map. three layers landed,
