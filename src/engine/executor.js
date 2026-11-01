@@ -482,7 +482,7 @@ class Executor extends EventEmitter {
     this.clearControls()
     try {
       for (const c of cells) {
-        const block = this.blockAt(c)
+        let block = this.blockAt(c)
         if (!block || (block.boundingBox === 'empty')) continue
         // autoTool, baritone-style: swing the right tool before every dig.
         // mining stone bare-handed takes 7.5s a block and the dig timeout
@@ -490,18 +490,44 @@ class Executor extends EventEmitter {
         if (this.s.autoTool !== false) {
           try { await equipForDig(this.bot, block.name) } catch (e) { /* fakes may not equip */ }
         }
-        this.lookAtBlock(c)
         // digging with the head underwater is drastically slower and burns
         // air the bot does not have — bail fast and let replanning route
         // around it instead of drowning mid-swing
         const p = this.pos()
         const submerged = p && this.view.water(Math.floor(p.x), Math.floor(p.y + 1.62), Math.floor(p.z))
-        const capMs = submerged ? 6000 : 20000
-        const done = this.bot.dig(block)
-        await Promise.race([
-          done,
-          new Promise((resolve, reject) => setTimeout(() => reject(new Error('dig timeout')), capMs))
-        ])
+        const capMs = submerged ? 6000 : 8000
+        // a hung dig (server never acks: occluded target, misaligned look)
+        // gets ONE re-look + retry, then the movement splices into a replan
+        // — a 20s dead swing was the difference between a stumble and a
+        // failed path
+        for (let attempt = 0; attempt < 2; attempt++) {
+          this.lookAtBlock(c)
+          try {
+            const digP = this.bot.dig(block)
+            // a timed-out dig may reject AFTER the race is lost (the swing
+            // finally aborts); an unhandled late rejection would crash the
+            // whole stack — swallow it, the retry owns the recovery
+            if (digP && digP.catch) digP.catch(() => {})
+            await Promise.race([
+              digP,
+              new Promise((resolve, reject) => setTimeout(() => reject(new Error('dig timeout')), capMs))
+            ])
+            break
+          } catch (e) {
+            if (attempt === 0 && String(e.message || e).includes('timeout')) {
+              // the block reference may be stale after the world moved —
+              // re-read it before the retry
+              const fresh = this.blockAt(c)
+              if (fresh && fresh.boundingBox !== 'empty') {
+                block = fresh
+                await new Promise((r) => setTimeout(r, 120))
+                continue
+              }
+              break
+            }
+            throw e
+          }
+        }
         // the backfill process wants to know about every hole we make
         if (this.onDig) this.onDig(c.x, c.y, c.z)
       }
