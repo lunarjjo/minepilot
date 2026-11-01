@@ -84,4 +84,29 @@ async function equipForDig (bot, blockName) {
   return best
 }
 
-module.exports = { bestToolFor, equipForDig, materialClass, TIERS }
+// vanilla mining speed multipliers per tool tier. the PLANNER uses these to
+// price digs with the tools the bot actually carries — the way baritone's
+// cost model consults the player's inventory before deciding that digging
+// through a wall beats walking around it.
+const TIER_SPEED = { wooden: 2, golden: 12, stone: 4, iron: 6, diamond: 8, netherite: 9 }
+
+// the best multiplier per tool class the inventory can field (1 = hands)
+function toolMultipliers (bot) {
+  const out = { pickaxe: 1, axe: 1, shovel: 1, hoe: 1 }
+  try {
+    const items = (bot.inventory && bot.inventory.items()) || []
+    for (const it of items) {
+      if (!it || typeof it.name !== 'string') continue
+      for (const cls of Object.keys(out)) {
+        if (it.name.endsWith('_' + cls)) {
+          const base = it.name.slice(0, it.name.length - cls.length - 1)
+          const sp = TIER_SPEED[base]
+          if (sp && sp > out[cls]) out[cls] = sp
+        }
+      }
+    }
+  } catch (e) { /* inventory unavailable */ }
+  return out
+}
+
+module.exports = { bestToolFor, equipForDig, toolMultipliers, materialClass, TIERS, TIER_SPEED }

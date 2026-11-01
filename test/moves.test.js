@@ -3,7 +3,7 @@
 const test = require('node:test')
 const assert = require('node:assert')
 const { VoxelWorld } = require('./helpers/fake')
-const { generate, digSeconds, DEFAULTS } = require('../src/engine/moves')
+const { generate, digSeconds, digCost, DEFAULTS } = require('../src/engine/moves')
 
 function viewOf (world) {
   // a view over the voxel world with null for unknown cells — the same
@@ -212,20 +212,96 @@ test('moves: parkour is generated only when opted in', () => {
   assert.strictEqual(jump.to.y, 64)
 })
 
-test('moves: pillar is opt-in via allowPillar', () => {
+test('moves: pillar is on by default and can be turned off', () => {
   const w = flat()
   const v = viewOf(w)
-  // default: no pillar (a headless placement ack is racy — see settings.js)
+  // default: pillar exists — the live-anchor + solid-verify placement made
+  // it safe, and climbing cliffs without it is impossible
   const def = generate(v, { x: 0, y: 64, z: 0 }, Object.assign({}, DEFAULTS))
-  assert.ok(!def.find((m) => m.type === 'pillar'), 'no pillar by default')
+  assert.ok(def.find((m) => m.type === 'pillar'), 'pillar by default')
   const off = generate(v, { x: 0, y: 64, z: 0 }, Object.assign({}, DEFAULTS, { allowPillar: false, allowPlace: false }))
   assert.ok(!off.find((m) => m.type === 'pillar'))
-  // opt in: the pillar move appears and places into the feet cell
+  // the pillar move places into the feet cell and gains exactly one block
   const on = generate(v, { x: 0, y: 64, z: 0 }, Object.assign({}, DEFAULTS, { allowPillar: true }))
   const p = on.find((m) => m.type === 'pillar')
   assert.ok(p)
   assert.strictEqual(p.to.y, 65)
   assert.deepStrictEqual(p.toPlace, [{ x: 0, y: 64, z: 0 }])
+})
+
+test('moves: diagonal ascent climbs slopes instead of tunneling them', () => {
+  const w = new VoxelWorld()
+  // a 45 degree dirt slope heading north-east: floor at 63 under (0,0),
+  // the diagonal cell (1,-1) has its support at y=64 (one higher)
+  w.fill(-2, 62, -2, 2, 62, 2, 'grass_block')
+  w.setBlock(0, 63, 0, 'grass_block') // under our feet: feet at 64
+  w.setBlock(1, 64, -1, 'grass_block') // the step up, diagonal NE
+  w.fill(-2, 64, -2, 2, 70, 2, 'air')
+  w.setBlock(0, 63, 0, 'grass_block')
+  w.setBlock(1, 64, -1, 'grass_block')
+  const v = viewOf(w)
+  const s = Object.assign({}, DEFAULTS)
+  const ms = generate(v, { x: 0, y: 64, z: 0 }, s)
+  const up = ms.find((m) => m.type === 'diagonal' && m.to.x === 1 && m.to.z === -1)
+  assert.ok(up, 'diagonal ascent to the step exists')
+  assert.strictEqual(up.to.y, 65)
+  assert.ok(!up.toBreak.some((b) => b.x === 1 && b.y === 64 && b.z === -1),
+    'the support block itself is never broken')
+  // opting out: no diagonal ascent
+  const no = generate(v, { x: 0, y: 64, z: 0 }, Object.assign({}, DEFAULTS, { allowDiagonalAscend: false }))
+  assert.ok(!no.find((m) => m.type === 'diagonal' && m.to.x === 1 && m.to.z === -1 && m.to.y === 65))
+})
+
+test('moves: ascendPlace staircases up a ledge with no support', () => {
+  const w = new VoxelWorld()
+  // we stand on a floor at 63 (feet 64). ahead east the ground breaks:
+  // a shelf sits at (1,63) but the step above it is missing — no support
+  // at (1,64), so the only way up is placing a block there and stepping
+  // onto it (the shelf below doubles as the placement anchor)
+  w.fill(-3, 63, -1, 0, 63, 1, 'grass_block')
+  w.fill(-3, 64, -1, 0, 69, 1, 'air')
+  w.setBlock(1, 63, 0, 'grass_block') // shelf — anchor, not support
+  w.fill(1, 64, -1, 4, 69, 1, 'air')
+  const v = viewOf(w)
+  const ms = generate(v, { x: 0, y: 64, z: 0 }, DEFAULTS)
+  const stair = ms.find((m) => m.type === 'ascendPlace' && m.to.x === 1 && m.to.z === 0)
+  assert.ok(stair, 'ascendPlace movement exists')
+  assert.strictEqual(stair.to.y, 65)
+  assert.deepStrictEqual(stair.toPlace, [{ x: 1, y: 64, z: 0 }])
+  // without placing, the move is not offered
+  const noPlace = generate(v, { x: 0, y: 64, z: 0 }, Object.assign({}, DEFAULTS, { allowPlace: false }))
+  assert.ok(!noPlace.find((m) => m.type === 'ascendPlace'))
+})
+
+test('moves: a drop too deep bridges down instead of falling', () => {
+  const w = new VoxelWorld()
+  // shelf at feet 64 ending at x=0; the floor ahead sits 7 lower (a lethal
+  // drop without fall damage), so the bridge staircase is the only route
+  w.fill(-3, 63, -1, 0, 63, 1, 'grass_block')
+  w.fill(-3, 64, -1, 0, 70, 1, 'air')
+  w.fill(1, 56, -1, 6, 56, 1, 'grass_block')
+  w.fill(1, 57, -1, 6, 70, 1, 'air')
+  const v = viewOf(w)
+  const ms = generate(v, { x: 0, y: 64, z: 0 }, DEFAULTS)
+  const bridge = ms.find((m) => m.type === 'bridge' && m.to.x === 1 && m.to.z === 0)
+  assert.ok(bridge, 'bridge move exists over the lethal drop')
+  assert.strictEqual(bridge.to.y, 64)
+  assert.ok(bridge.toPlace.length === 1)
+  // no plain fall may be offered at the same time
+  assert.ok(!ms.find((m) => m.type === 'fall' && m.to.x === 1 && m.to.z === 0))
+})
+
+test('moves: dig cost follows the carried tools, not bare hands', () => {
+  const s = Object.assign({}, DEFAULTS, {
+    toolMults: { pickaxe: 6, axe: 1, shovel: 1, hoe: 1 }
+  })
+  const stone = { name: 'stone', hardness: 1.5 }
+  const hand = digCost(stone, Object.assign({}, DEFAULTS))
+  const pick = digCost(stone, s)
+  assert.ok(pick < hand / 4, 'an iron pickaxe slashes stone dig cost')
+  // oak log (axe class): the pickaxe mults do not help
+  const log = { name: 'oak_log', hardness: 2 }
+  assert.ok(digCost(log, s) === digCost(log, Object.assign({}, DEFAULTS)), 'unrelated tool classes are untouched')
 })
 
 test('moves: bridge appears over bottomless gaps when placing is allowed', () => {

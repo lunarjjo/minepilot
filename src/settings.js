@@ -234,12 +234,14 @@ function createDefaultSettings () {
   // ---- movement -------------------------------------------------------
   s.define('allowBreak', 'bool', true, 'the pathfinder may dig through breakable blocks when it is the cheapest route', 'movement')
   s.define('allowPlace', 'bool', true, 'the pathfinder may bridge gaps using inventory blocks', 'movement')
-  s.define('allowPillar', 'bool', false, 'the pathfinder may pillar straight up by placing blocks below itself. default off on purpose: a headless client cannot verify its own pillar placement ack, and a racy pillar burns inventory climbing its own tower — botfleet shipped pillar opt-in for the same reason', 'movement')
+  s.define('allowPillar', 'bool', true, 'the pathfinder may pillar straight up by placing blocks below itself. placement is anchored to the live position and verified solid before the next jump, so the old rocket-tower failure mode is gone — climbing cliffs needs it', 'movement')
   s.define('allowSprint', 'bool', true, 'sprinting is allowed while walking paths', 'movement')
-  s.define('allowParkour', 'bool', false, 'sprint-jump one block gaps (skilled movement, same default as baritone)', 'movement')
   s.define('allowParkourAscend', 'bool', false, 'parkour jumps that gain a block of height', 'movement')
-  s.define('allowDiagonalAscend', 'bool', false, '45 degree ascents', 'movement')
+  s.define('allowParkour', 'bool', false, 'sprint-jump one block gaps (skilled movement, same default as baritone)', 'movement')
+  s.define('allowSprintJump', 'bool', true, 'bunny-hop (hold jump) while sprinting long flat straights — the baritone speed trick', 'movement')
+  s.define('allowDiagonalAscend', 'bool', true, '45 degree ascents — the smooth way up slopes', 'movement')
   s.define('allowDiagonalDescend', 'bool', true, '45 degree descents', 'movement')
+  s.define('maxDigDown', 'int', 8, 'deepest straight-down shaft the planner offers (dig through the floor, one block at a time, no fall damage)', 'movement', { min: 1, max: 32 })
   s.define('allowDownward', 'bool', true, 'descending and falling are legal moves', 'movement')
   s.define('allowSwimming', 'bool', true, 'swimming across water is legal (baritone defaults false because of lag; a bot does not care)', 'movement')
   s.define('sprintInWater', 'bool', true, 'sprint while swimming', 'movement')
@@ -264,7 +266,7 @@ function createDefaultSettings () {
   s.define('parkourCost', 'float', 2.5, 'cost of a parkour jump', 'costs', { min: 0.1, max: 10 })
   s.define('fallCostPerBlock', 'float', 0.1, 'cost added per block of fall distance', 'costs', { min: 0, max: 10 })
   s.define('fallDamageCost', 'float', 0.5, 'cost per half heart of expected fall damage', 'costs', { min: 0, max: 10 })
-  s.define('walkBlocksPerSecond', 'float', 4.3, 'walking speed used to convert dig seconds into cost units', 'costs', { min: 1, max: 10 })
+  s.define('walkBlocksPerSecond', 'float', 5.6, 'sprint walking speed used to convert dig seconds into cost units', 'costs', { min: 1, max: 10 })
 
   // ---- mining ----------------------------------------------------------
   s.define('blocksToAvoid', 'blocks', [], 'blocks the pathfinder refuses to walk on (magma, honey...) even when they support the feet', 'mining')
@@ -343,6 +345,7 @@ function createDefaultSettings () {
 
   // ---- full-auto survival brain ---------------------------------------
   s.define('autoSurvival', 'bool', false, 'the full-auto brain: reflexes, needs and goals without commands (#auto)', 'brain')
+  s.define('autoWatchdogMs', 'int', 20000, 'full-auto watchdog: a claimed task with zero movement and zero work for this long gets restarted (the "bot does not move" cure)', 'brain', { min: 2000, max: 300000 })
   s.define('autoExplore', 'bool', true, 'when the brain has nothing pressing, scout unseen chunks', 'brain')
   s.define('autoHunt', 'bool', true, 'the brain may hunt animals when it runs out of food', 'brain')
 

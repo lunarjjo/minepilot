@@ -1,32 +1,48 @@
 'use strict'
 
 // the executor: turns a plan (a list of movements) into live physics.
-// it drives the bot like a player would — look, hold forward, jump at
-// steps — and watches the plan the whole way:
+// it drives the bot the way baritone drives a player:
 //
-//   splice   every tick the next few movements are re-validated against
-//            the live world; the moment one stops being legal (someone
-//            placed a wall, the ground fell away), it asks for a replan
-//            instead of walking into it
-//   stuck    if the bot stops making progress, escalate: jump-nudge,
-//            dig the blocks in the way, then force a replan
-//   dig      movements that break through blocks dig them first
-//   place    pillar movements jump and place a block underneath
+//   steering  consecutive collinear segments are MERGED — the bot aims at
+//             a look-ahead point down the path instead of stopping its
+//             gaze on every cell center, so corners are cut smoothly and
+//             forward/sprint are never released between blocks (the old
+//             per-cell control reset was the stutter)
+//   sprint    enabled on straight runs of 3+ blocks; sprint-JUMP (hold
+//             jump, auto re-jump on landing — the bunny hop) on flat runs
+//             of 4+ with headroom: ~7 blocks/s, the trick that makes
+//             baritone cover flat ground absurdly fast
+//   validate  the near future is re-checked with a CHEAP per-move
+//             validator every other tick; the first move that stops being
+//             true forces a splice (replan), never a blind walk into a
+//             wall the world just placed there. (the old validator
+//             regenerated the full movement list and doomed chained
+//             placements — a bridge's next move never "existed" until the
+//             current one placed its block, so bridging replanned forever
+//             without placing anything)
+//   dig       movements that break through blocks dig them FIRST, with
+//             the best tool equipped (autoTool), from within reach
+//   place     pillar/bridge/ascendPlace movements place before stepping
 //
 // the bot interface it needs is small (look, setControlState, dig,
 // placeBlock, world.getBlock, entity) so the same executor runs against
 // the kinematic fake in unit tests and a real mineflayer bot in E2E.
 
 const { EventEmitter } = require('events')
-const { generate } = require('./moves')
-const { equipForPlace } = require('./place')
+const { validateMove } = require('./moves')
+const { equipForPlace, anchorsFor } = require('./place')
+const { equipForDig } = require('../autotool')
 
 const TICK_MS = 100
 const LOOKAHEAD = 4
+const STEER_MAX = 6 // merge up to six collinear segments into one steer
+const SPRINT_MIN_RUN = 3 // sprint when the straight run is at least this long
+const BUNNY_MIN_RUN = 4 // hold jump (sprint-jump) on flat runs this long
 const STUCK_MS = 2500
 const STUCK_LIMIT = 6
 const ARRIVE_HORZ = 0.45
 const ARRIVE_VERT = 1.25
+const DIG_REACH = 4.0
 
 // field-diagnosis switch for placement problems: MINEPILOT_DEBUG_PLACE=1
 // prints every placement attempt (kind, planned vs live cell) to stderr
@@ -52,6 +68,8 @@ class Executor extends EventEmitter {
     this.lastDist = Infinity
     this.worseTicks = 0
     this.replans = 0
+    this.tickCount = 0
+    this.sprinting = false
   }
 
   // ---- lifecycle -------------------------------------------------------
@@ -67,6 +85,8 @@ class Executor extends EventEmitter {
     this.worseTicks = 0
     this.placeTries = 0
     this.noMaterial = false
+    this.tickCount = 0
+    this.sprinting = false
     if (this.queue.length === 0) {
       this.finish('arrived')
       return
@@ -81,6 +101,7 @@ class Executor extends EventEmitter {
     this.timer = null
     this.running = false
     this.digging = false
+    this.sprinting = false
     this.clearControls()
   }
 
@@ -141,22 +162,33 @@ class Executor extends EventEmitter {
     if (!m) return
     const p = this.pos()
     if (!p) return
+    this.tickCount++
 
-    // validate the near future; a plan that stopped being true must splice
-    if (this.index === 0 || this.arrivedCheck(m, p) === false) {
+    // validate the near future; a plan that stopped being true must splice.
+    // every OTHER tick is plenty — the validator is cheap but the tick is
+    // 100ms and the world rarely changes faster than that.
+    if ((this.tickCount & 1) === 0) {
       for (let ahead = 0; ahead < LOOKAHEAD; ahead++) {
         const f = this.queue[this.index + ahead]
         if (!f) break
-        if (!this.stillValid(f)) {
+        if (!validateMove(this.view, f)) {
           this.emit('splice', { at: this.index + ahead, reason: 'world changed' })
           return
         }
       }
     }
 
-    // break through what needs breaking
+    // break through what needs breaking — but only from within reach: a
+    // dig started out of reach is the "hasty" swing that never lands
     const pending = m.toBreak.filter((b) => this.view.solid(b.x, b.y, b.z))
     if (pending.length > 0) {
+      const f = pending[0]
+      const d = Math.hypot((f.x + 0.5) - p.x, (f.y + 0.5) - (p.y + 1), (f.z + 0.5) - p.z)
+      if (d > DIG_REACH) {
+        // walk toward the work first; the dig starts once it is in reach
+        this.drive(m, p)
+        return
+      }
       this.digThrough(pending)
       return
     }
@@ -177,30 +209,80 @@ class Executor extends EventEmitter {
     this.trackStuck(m, p)
   }
 
-  stillValid (m) {
-    const fresh = generate(this.view, m.from, this.s)
-    return fresh.some((c) => c.to.x === m.to.x && c.to.y === m.to.y && c.to.z === m.to.z && c.type === m.type)
+  // ---- steering: merge collinear segments, aim ahead ---------------------
+
+  // the steer target: the furthest endpoint of the run of collinear,
+  // work-free walking segments ahead. aiming here instead of the current
+  // cell center is what lets the bot flow through straight runs (and
+  // diagonals) without per-block stutter; arrival is still measured per
+  // cell by arrivedCheck so precision is never lost.
+  steerTarget () {
+    const m = this.current()
+    if (!m) return null
+    let end = { x: m.to.x, y: m.to.y, z: m.to.z }
+    let run = 1
+    let flat = m.to.y === m.from.y
+    const dx = Math.sign(m.to.x - m.from.x)
+    const dz = Math.sign(m.to.z - m.from.z)
+    const mergeable = m.type === 'traverse' || m.type === 'diagonal'
+    if (mergeable && (dx !== 0 || dz !== 0)) {
+      for (let k = this.index + 1; k < this.queue.length && run < STEER_MAX; k++) {
+        const nxt = this.queue[k]
+        if (nxt.toBreak.length || (nxt.toPlace && nxt.toPlace.length)) break // work boundary
+        if (nxt.type !== 'traverse' && nxt.type !== 'diagonal') break
+        const ndx = Math.sign(nxt.to.x - nxt.from.x)
+        const ndz = Math.sign(nxt.to.z - nxt.from.z)
+        if (ndx !== dx || ndz !== dz) break
+        if (nxt.to.y !== nxt.from.y) flat = false
+        end = { x: nxt.to.x, y: nxt.to.y, z: nxt.to.z }
+        run++
+      }
+    }
+    // headroom for jumping: +2 clear over every cell of the run (the jump
+    // raises the body 1.25 above its cells; walking only needs +1)
+    let headroom = false
+    if (flat && run >= BUNNY_MIN_RUN) {
+      headroom = true
+      for (let k = this.index; k < this.index + run && headroom; k++) {
+        const q = this.queue[k]
+        if (!q) { headroom = false; break }
+        if (!this.view.passable(q.from.x, q.from.y + 2, q.from.z)) headroom = false
+        if (!this.view.passable(q.to.x, q.to.y + 2, q.to.z)) headroom = false
+      }
+    }
+    const cellsLeft = this.queue.length - this.index
+    return { x: end.x, y: end.y, z: end.z, run, flat, headroom, nearEnd: cellsLeft <= 2 }
   }
 
   // ---- movement driving ------------------------------------------------
 
   drive (m, p) {
-    const tx = m.to.x
-    const tz = m.to.z
-    const dx = (tx + 0.5) - p.x
-    const dz = (tz + 0.5) - p.z
-    const horz = Math.sqrt(dx * dx + dz * dz)
-    const rising = m.to.y > m.from.y
+    const steer = this.steerTarget() || { x: m.to.x, y: m.to.y, z: m.to.z, run: 1, flat: true, headroom: false, nearEnd: true }
+    const aimAtCurrent = m.type === 'descend' || m.type === 'fall' || m.type === 'parkour' ||
+      m.type === 'bridge' || m.type === 'ascend' || m.type === 'pillar' || m.type === 'climb'
+    const tx = aimAtCurrent ? m.to.x : steer.x
+    const tz = aimAtCurrent ? m.to.z : steer.z
 
     this.lookAt(tx, m.to.y, tz, m.type === 'fall' ? 0.25 : (m.type === 'ascend' ? -0.15 : 0))
 
     switch (m.type) {
       case 'traverse':
       case 'diagonal':
+      case 'ascendPlace': {
         this.control('forward', true)
-        this.control('sprint', horz > 2)
-        this.control('jump', false)
+        // sprint on straight runs; the steer merge is what makes a run
+        // long enough to be worth the sprint at all
+        const canSprint = this.s.allowSprint !== false && steer.run >= SPRINT_MIN_RUN && !steer.nearEnd
+        this.control('sprint', canSprint)
+        this.sprinting = canSprint
+        // the bunny hop: hold jump while sprinting a flat straight run
+        // with headroom. mineflayer re-jumps on every landing, which is
+        // exactly how a player sprint-jumps — ~7 blocks/s on flat ground
+        const hop = canSprint && this.s.allowSprintJump !== false &&
+          steer.run >= BUNNY_MIN_RUN && steer.flat && steer.headroom
+        this.control('jump', hop)
         break
+      }
       case 'swim':
         // surface swim: keep bobbing up so a long crossing never drains
         // the air bar — a submerged bot drowns, a floating one does not
@@ -209,6 +291,7 @@ class Executor extends EventEmitter {
         this.control('jump', true)
         break
       case 'ascend':
+      case 'ascendPlace':
       case 'pillar':
         this.control('forward', true)
         // hold the jump while below the step, and while in water (the way
@@ -219,32 +302,45 @@ class Executor extends EventEmitter {
           this.control('jump', p.y < m.to.y - 0.3 || inWater)
         }
         this.control('sprint', false)
+        this.sprinting = false
         break
       case 'climb':
         this.control('forward', true)
         this.control('jump', m.to.y > m.from.y)
         this.control('sprint', false)
+        this.sprinting = false
         break
       case 'descend':
-        this.control('forward', horz > 0.2)
+        this.control('forward', true)
         this.control('jump', false)
         this.control('sprint', false)
+        this.sprinting = false
+        break
+      case 'digFall':
+        // the shaft digs itself: the pending-break loop eats the column
+        // top-down and the body drops one block per break. stand still,
+        // look down, and let gravity do the walking
+        this.control('forward', false)
+        this.control('jump', false)
+        this.control('sprint', false)
+        this.sprinting = false
         break
       case 'fall':
-        this.control('forward', horz > 0.35)
+        this.control('forward', true)
         this.control('jump', false)
         this.control('sprint', false)
+        this.sprinting = false
         break
       case 'parkour':
       case 'bridge':
         this.control('forward', true)
         this.control('sprint', m.type === 'parkour')
         this.control('jump', m.type === 'parkour')
+        this.sprinting = m.type === 'parkour'
         break
       default:
         this.control('forward', true)
     }
-    void rising
   }
 
   arrivedCheck (m, p) {
@@ -260,12 +356,21 @@ class Executor extends EventEmitter {
 
     if (horz <= ARRIVE_HORZ && vert <= ARRIVE_VERT && settled) return true
 
-    // walked past the target: count consecutive worse distances and
-    // forgive the miss (physics rarely lands dead-center). the forgiveness
-    // stays tight on purpose: drops, veins and placements are all reached
-    // from the CELL itself — declaring arrival 2 blocks away made the bot
-    // stop at hole rims forever while the loot sat below (and the loose
-    // margin also let pillar chains spiral). botfleet's numbers, kept.
+    // PASSED the node: beyond its center along the movement direction. a
+    // sprinting bot (and a bunny-hopping one, which is airborne over cell
+    // centers with velocity.y far from settled) must not orbit back to a
+    // node it already crossed — the old forgiveness needed 8 worsening
+    // ticks and a sub-1.6 miss, which turned overshoots into figure
+    // eights. only for intermediate nodes: the LAST node gets the strict
+    // centered+settled arrival above.
+    const dirx = Math.sign(m.to.x - m.from.x)
+    const dirz = Math.sign(m.to.z - m.from.z)
+    if ((dirx !== 0 || dirz !== 0) && this.index < this.queue.length - 1) {
+      const past = (p.x - (m.to.x + 0.5)) * dirx + (p.z - (m.to.z + 0.5)) * dirz
+      if (past > 0.3 && vert <= ARRIVE_VERT + 0.5) return true
+    }
+
+    // walked past and getting worse anyway: forgive a small miss
     if (horz > this.lastDist + 0.01) {
       this.worseTicks++
       if (this.worseTicks > 8 && horz < 1.6 && vert <= ARRIVE_VERT) return true
@@ -287,13 +392,18 @@ class Executor extends EventEmitter {
     if (this.index >= this.queue.length) {
       this.finish('arrived')
     } else {
-      this.clearControls()
+      // keep walking: only drop the transient controls. releasing
+      // forward between cells was the per-block stutter; the next drive()
+      // re-applies forward/sprint/jump as its steering demands
+      this.control('jump', false)
+      this.control('sneak', false)
     }
     void m
   }
 
   finish (kind, extra) {
     this.running = false
+    this.sprinting = false
     if (this.timer) clearInterval(this.timer)
     this.timer = null
     this.clearControls()
@@ -302,42 +412,60 @@ class Executor extends EventEmitter {
 
   // ---- stuck handling --------------------------------------------------
 
+  // stuck = no PROGRESS TOWARD THE CURRENT MOVE for a while. the old
+  // detector measured any position change — a bot bouncing on a jump arc
+  // (an ascend whose launch floor was dug out from under it) "moved" 1.4
+  // blocks every 300ms and never tripped. measuring the distance to the
+  // move's own target ratchets: only real approach resets the clock, and
+  // oscillation around the same distance ages out into an escalation.
   trackStuck (m, p) {
+    const dist = Math.hypot((m.to.x + 0.5) - p.x, m.to.y - p.y, (m.to.z + 0.5) - p.z)
     if (!this.stuckPos) {
-      this.stuckPos = { x: p.x, y: p.y, z: p.z, t: Date.now() }
+      this.stuckPos = { x: p.x, y: p.y, z: p.z, t: Date.now(), dist }
       return
     }
-    const moved = Math.abs(p.x - this.stuckPos.x) + Math.abs(p.y - this.stuckPos.y) + Math.abs(p.z - this.stuckPos.z)
-    if (moved > 0.35) {
-      this.stuckPos = { x: p.x, y: p.y, z: p.z, t: Date.now() }
+    if (dist < this.stuckPos.dist - 0.35) {
+      // real progress toward this move — restart the clock
+      this.stuckPos = { x: p.x, y: p.y, z: p.z, t: Date.now(), dist }
       return
     }
     const held = Date.now() - this.stuckPos.t
     if (held < STUCK_MS) return
 
     this.stuckEvents++
-    this.stuckPos = { x: p.x, y: p.y, z: p.z, t: Date.now() }
+    this.stuckPos = { x: p.x, y: p.y, z: p.z, t: Date.now(), dist }
     this.emit('stuck', { events: this.stuckEvents, move: m.type })
 
     if (this.stuckEvents >= STUCK_LIMIT) {
       this.finish('failed', { reason: 'stuck', events: this.stuckEvents })
       return
     }
-    // escalation: nudge-jump, then dig the face ahead, then replan
-    if (this.stuckEvents % 3 === 2 && this.s.allowBreak) {
-      const f = this.current()
-      const dir = f ? { dx: Math.sign(f.to.x - f.from.x), dz: Math.sign(f.to.z - f.from.z) } : { dx: 1, dz: 0 }
-      const ahead = [
-        { x: Math.floor(p.x) + dir.dx, y: Math.floor(p.y), z: Math.floor(p.z) + dir.dz },
-        { x: Math.floor(p.x) + dir.dx, y: Math.floor(p.y) + 1, z: Math.floor(p.z) + dir.dz }
-      ]
-      const diggable = ahead.filter((c) => this.view.solid(c.x, c.y, c.z))
+
+    // the most common stuck by far: a solid block at feet or head ahead.
+    // dig it out FIRST (with the right tool) — jumping into a wall or
+    // replanning into the same wall both just burn time
+    const dirx = Math.sign(m.to.x - m.from.x)
+    const dirz = Math.sign(m.to.z - m.from.z)
+    if ((dirx !== 0 || dirz !== 0) && this.s.allowBreak) {
+      const fx = Math.floor(p.x)
+      const fy = Math.floor(p.y)
+      const fz = Math.floor(p.z)
+      const diggable = []
+      for (const c of [
+        { x: fx + dirx, y: fy, z: fz + dirz },
+        { x: fx + dirx, y: fy + 1, z: fz + dirz }
+      ]) {
+        if (!this.view.solid(c.x, c.y, c.z)) continue
+        const info = this.view.breakInfo(c.x, c.y, c.z)
+        if (info && info.breakable) diggable.push(c)
+      }
       if (diggable.length > 0) {
         this.digThrough(diggable)
         return
       }
     }
-    if (this.stuckEvents % 3 === 0) {
+    // then the classic ladder: nudge-jump, then splice into a replan
+    if (this.stuckEvents % 2 === 1) {
       this.control('jump', true)
       this.control('forward', true)
       setTimeout(() => { try { this.bot.setControlState('jump', false) } catch (e) { /* gone */ } }, 600)
@@ -356,6 +484,12 @@ class Executor extends EventEmitter {
       for (const c of cells) {
         const block = this.blockAt(c)
         if (!block || (block.boundingBox === 'empty')) continue
+        // autoTool, baritone-style: swing the right tool before every dig.
+        // mining stone bare-handed takes 7.5s a block and the dig timeout
+        // eats the whole movement; a pickaxe makes it under a second
+        if (this.s.autoTool !== false) {
+          try { await equipForDig(this.bot, block.name) } catch (e) { /* fakes may not equip */ }
+        }
         this.lookAtBlock(c)
         // digging with the head underwater is drastically slower and burns
         // air the bot does not have — bail fast and let replanning route
@@ -378,7 +512,7 @@ class Executor extends EventEmitter {
     }
   }
 
-  // ---- placing (pillar + bridge) ---------------------------------------
+  // ---- placing (pillar + bridge + ascendPlace) --------------------------
 
   placedFor (m) {
     const c = m.toPlace[0]
@@ -393,24 +527,34 @@ class Executor extends EventEmitter {
     }
   }
 
+  // resolve the anchor block + face for a placement cell: an explicit
+  // ref first (bridges), then ANY solid neighbor face (the staircase-up
+  // has no fixed anchor — whatever the world offers), then below.
+  anchorFor (c) {
+    if (c.ref) {
+      const b = this.blockAt(c.ref)
+      if (b) return { block: b, face: c.face || { x: 0, y: 1, z: 0 } }
+    }
+    for (const a of anchorsFor(this.view, c)) {
+      const b = this.blockAt(a.ref)
+      if (b) return { block: b, face: a.face }
+    }
+    const below = this.blockAt({ x: c.x, y: c.y - 1, z: c.z })
+    if (below) return { block: below, face: { x: 0, y: 1, z: 0 } }
+    return null
+  }
+
   async placeFor (m) {
     if (this.placing) return
     this.placing = true
     const dbg = PLACE_DEBUG
     try {
       const c = m.toPlace[0]
-      const bridge = m.placeKind === 'bridge'
+      const kind = m.placeKind || (m.type === 'pillar' ? 'pillar' : 'bridge')
       if (dbg) {
         const p = this.pos()
-        console.error(`[place] kind=${bridge ? 'bridge' : 'pillar'} plan=(${c.x},${c.y},${c.z}) live=(${p ? Math.floor(p.x) : '?'},${p ? Math.floor(p.y) : '?'},${p ? Math.floor(p.z) : '?'}) idx=${this.index}/${this.queue.length}`)
+        console.error(`[place] kind=${kind} plan=(${c.x},${c.y},${c.z}) live=(${p ? Math.floor(p.x) : '?'},${p ? Math.floor(p.y) : '?'},${p ? Math.floor(p.z) : '?'}) idx=${this.index}/${this.queue.length}`)
       }
-      // an explicit ref/face pair (bridge) or the block below (pillar)
-      const ref = c.ref ? this.blockAt(c.ref) : this.blockAt({ x: c.x, y: c.y - 1, z: c.z })
-      if (!ref) {
-        this.bumpPlaceTries()
-        return
-      }
-      const face = c.face || { x: 0, y: 1, z: 0 }
       const item = await equipForPlace(this.view, this.bot, c.block || null)
       if (!item) {
         // log once per no-material episode, not once per movement tick
@@ -422,13 +566,29 @@ class Executor extends EventEmitter {
         this.bumpPlaceTries()
         return
       }
-      if (bridge) {
+      if (kind === 'bridge') {
         // stand still, sneak over the edge, click the ledge face sideways
+        const anchor = this.anchorFor(c)
+        if (!anchor) {
+          this.bumpPlaceTries()
+          return
+        }
         this.control('forward', false)
         this.control('sneak', true)
         this.lookAt(c.x, c.y, c.z, 0.5)
-        await this.bot.placeBlock(ref, new this.Vec3(face.x, face.y, face.z))
+        await this.bot.placeBlock(anchor.block, new this.Vec3(anchor.face.x, anchor.face.y, anchor.face.z))
         setTimeout(() => this.control('sneak', false), 250)
+      } else if (kind === 'ascend') {
+        // staircase up: place the missing support beside us, then step
+        // onto it like a normal ascend. no sneak — the click is a side or
+        // bottom face, never over an edge
+        const anchor = this.anchorFor(c)
+        if (!anchor) {
+          this.bumpPlaceTries()
+          return
+        }
+        this.lookAt(c.x, c.y, c.z, 0.4)
+        await this.bot.placeBlock(anchor.block, new this.Vec3(anchor.face.x, anchor.face.y, anchor.face.z))
       } else {
         // pillar: jump, then place into the cell under our CURRENT feet.
         // the anchor must be the live position, never the plan node — a
@@ -501,9 +661,11 @@ class Executor extends EventEmitter {
       total: this.queue.length,
       replans: this.replans,
       stuckEvents: this.stuckEvents,
-      type: this.current() ? this.current().type : null
+      type: this.current() ? this.current().type : null,
+      sprinting: this.sprinting
     }
   }
 }
 
 module.exports = { Executor, TICK_MS, STUCK_MS }
+

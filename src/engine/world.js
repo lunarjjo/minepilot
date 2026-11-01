@@ -137,7 +137,89 @@ class WorldView {
   }
 }
 
-module.exports = { WorldView, AIR_LIKE, CLIMBABLE, LIQUIDS, UNSAFE_LIQUIDS, NON_SOLID }
+// a snapshot cache over another view, for the duration of ONE synchronous
+// search. the A* re-reads the same columns many times (landing scans,
+// neighbor checks, hazard rules); against a real mineflayer world every
+// getBlock allocates a Vec3 and walks a chunk section, which is what made
+// long plans hit the 3.5s wall-clock budget after a few thousand nodes.
+// the cache is safe because search() never awaits: nothing can change the
+// world between the first read and the plan being returned. the executor
+// keeps using the LIVE view — it must see the world as it is right now.
+class CachedView {
+  constructor (inner) {
+    this.inner = inner
+    this.cache = new Map()
+    this.registry = inner.registry
+    this.rules = inner.rules
+  }
+
+  block (x, y, z) {
+    const k = x + ',' + y + ',' + z
+    let b = this.cache.get(k)
+    if (b === undefined) {
+      b = this.inner.block(x, y, z)
+      // cache null too (fog is fog for the whole plan); store a sentinel
+      // so undefined never re-reads
+      this.cache.set(k, b === null ? null : b)
+      return b
+    }
+    return b === null ? null : b
+  }
+
+  name (x, y, z) {
+    const b = this.block(x, y, z)
+    return b ? b.name : null
+  }
+
+  passable (x, y, z) {
+    const b = this.block(x, y, z)
+    if (!b) return false
+    if (b.boundingBox) return b.boundingBox === 'empty' || NON_SOLID.has(b.name)
+    return AIR_LIKE.has(b.name) || NON_SOLID.has(b.name)
+  }
+
+  known (x, y, z) {
+    return this.block(x, y, z) !== null
+  }
+
+  breakInfo (x, y, z) {
+    return this.inner.breakInfo(x, y, z) // registry work, cheap, rule-based
+  }
+
+  solid (x, y, z) {
+    const b = this.block(x, y, z)
+    if (!b) return false
+    if (b.boundingBox) return b.boundingBox !== 'empty' && !NON_SOLID.has(b.name)
+    return !AIR_LIKE.has(b.name) && !NON_SOLID.has(b.name)
+  }
+
+  liquid (x, y, z) {
+    const n = this.name(x, y, z)
+    return LIQUIDS.has(n) || UNSAFE_LIQUIDS.has(n)
+  }
+
+  water (x, y, z) {
+    return LIQUIDS.has(this.name(x, y, z))
+  }
+
+  lava (x, y, z) {
+    return UNSAFE_LIQUIDS.has(this.name(x, y, z))
+  }
+
+  climbable (x, y, z) {
+    return CLIMBABLE.has(this.name(x, y, z))
+  }
+
+  standable (x, y, z) {
+    const b = this.block(x, y, z)
+    if (!b) return false
+    if (this.rules && this.rules.avoid && this.rules.avoid.has(b.name)) return false
+    if (b.boundingBox) return b.boundingBox !== 'empty' && !NON_SOLID.has(b.name)
+    return !AIR_LIKE.has(b.name) && !NON_SOLID.has(b.name)
+  }
+}
+
+module.exports = { WorldView, CachedView, AIR_LIKE, CLIMBABLE, LIQUIDS, UNSAFE_LIQUIDS, NON_SOLID }
 
 // build the live rule set the WorldView and the movement generator share,
 // from the settings registry (or anything with .get(key)). exported so the

@@ -10,7 +10,8 @@ const { Vec3 } = require('vec3')
 
 const {
   GoalBlock, GoalNear, GoalXZ, GoalTwoBlocks, GoalAxis,
-  GoalStrictDirection, GoalGetToBlock, GoalComposite, GoalCompositeAnd
+  GoalStrictDirection, GoalGetToBlock, GoalComposite, GoalCompositeAnd,
+  SPRINT_FACTOR
 } = require('../src/engine/goals')
 const { createDefaultSettings } = require('../src/settings')
 const { WorldView, rulesFromSettings } = require('../src/engine/world')
@@ -40,8 +41,8 @@ test('goal axis: nearest axis line satisfies, any y unless pinned', () => {
   const gy = new GoalAxis(64)
   assert.strictEqual(gy.isMet(0, 64, 12), true)
   assert.strictEqual(gy.isMet(0, 70, 12), false)
-  // heuristic: min(|x|,|z|) is admissible
-  assert.strictEqual(g.heuristic(5, 64, 9), 5)
+  // heuristic: min(|x|,|z|) is admissible, sprint-priced
+  assert.strictEqual(g.heuristic(5, 64, 9), 5 * SPRINT_FACTOR)
 })
 
 test('goal strict direction: past the origin along the ray', () => {
@@ -60,8 +61,8 @@ test('goal get to block: baritone adjacency semantics', () => {
   assert.strictEqual(g.isMet(1, 63, 0), true) // one below, head beside it
   assert.strictEqual(g.isMet(2, 64, 0), false)
   assert.strictEqual(g.isMet(1, 65, 0), false) // above it: |dy| counts fully
-  assert.strictEqual(g.heuristic(1, 64, 0), 1)
-  assert.strictEqual(g.heuristic(1, 63, 0), 1)
+  assert.strictEqual(g.heuristic(1, 64, 0), 1 * SPRINT_FACTOR)
+  assert.strictEqual(g.heuristic(1, 63, 0), 1 * SPRINT_FACTOR)
 })
 
 test('goal composite and: every sub-goal must be met', () => {
@@ -72,14 +73,14 @@ test('goal composite and: every sub-goal must be met', () => {
   assert.strictEqual(near.isMet(0, 64, 0), true)
   // the heuristic is the max of the sub-heuristics (the farther goal
   // dominates; the sum could overestimate)
-  assert.strictEqual(g.heuristic(0, 64, 0), 10 * Math.SQRT2)
+  assert.strictEqual(g.heuristic(0, 64, 0), 10 * Math.SQRT2 * SPRINT_FACTOR)
 })
 
 test('goal composite or: still the any() semantics', () => {
   const g = new GoalComposite(new GoalXZ(0, 0), new GoalXZ(10, 10))
   assert.strictEqual(g.isMet(0, 64, 0), true)
   assert.strictEqual(g.heuristic(0, 64, 0), 0)
-  assert.strictEqual(g.heuristic(5, 64, 5), 5 * Math.SQRT2)
+  assert.strictEqual(g.heuristic(5, 64, 5), 5 * Math.SQRT2 * SPRINT_FACTOR)
 })
 
 // ------------------------------------------------------------- settings

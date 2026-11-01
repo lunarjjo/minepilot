@@ -4,7 +4,7 @@ const test = require('node:test')
 const assert = require('node:assert')
 const {
   GoalBlock, GoalNear, GoalXZ, GoalYLevel, GoalComposite, GoalInverted,
-  GoalRunAway, GoalFollow, octile
+  GoalRunAway, GoalFollow, octile, SPRINT_FACTOR
 } = require('../src/engine/goals')
 
 test('octile: cardinals, diagonals and zero', () => {
@@ -20,9 +20,11 @@ test('goal block: exact match, heuristic is a lower bound', () => {
   const g = new GoalBlock(10, 70, -5)
   assert.strictEqual(g.isMet(10, 70, -5), true)
   assert.strictEqual(g.isMet(10, 71, -5), false)
-  // true optimal cost to walk 5 north + 3 up: 5 + 3*2 = 11 (three ascends)
+  // true optimal cost to walk 5 north + 3 up: 5 + 3*2 = 11 (three ascends).
+  // the horizontal term is priced at sprint pace (baritone's sprint-based
+  // COST_HEURISTIC) so it never overestimates a sprintable route
   assert.ok(g.heuristic(5, 67, -5) <= 11)
-  assert.ok(g.heuristic(5, 67, -5) >= 8) // octile(5) + |dy| = 5+3
+  assert.ok(g.heuristic(5, 67, -5) >= 5 * SPRINT_FACTOR + 3) // octile(5)*0.8 + |dy|
   assert.strictEqual(g.label(), 'block 10 70 -5')
 })
 
@@ -30,7 +32,7 @@ test('goal near: radius satisfaction and slack', () => {
   const g = new GoalNear(0, 64, 0, 2)
   assert.strictEqual(g.isMet(1, 64, 1), true)
   assert.strictEqual(g.isMet(2, 64, 2), false) // dist^2 = 8 > 4
-  assert.strictEqual(g.heuristic(5, 64, 0), 3) // 5 - 2
+  assert.strictEqual(g.heuristic(5, 64, 0), 5 * SPRINT_FACTOR - 2) // sprint-priced 5, minus the radius
   assert.strictEqual(g.heuristic(1, 64, 1), 0)
 })
 
@@ -38,8 +40,8 @@ test('goal xz: horizontal only', () => {
   const g = new GoalXZ(8, -8)
   assert.strictEqual(g.isMet(8, 40, -8), true)
   assert.strictEqual(g.isMet(8, 90, -7), false)
-  assert.strictEqual(g.heuristic(0, 64, 0), 8 + (Math.SQRT2 - 1) * 8) // octile(8,8)
-  assert.strictEqual(new GoalXZ(8, 0).heuristic(0, 64, 0), 8)
+  assert.strictEqual(g.heuristic(0, 64, 0), (8 + (Math.SQRT2 - 1) * 8) * SPRINT_FACTOR) // octile(8,8), sprint-priced
+  assert.strictEqual(new GoalXZ(8, 0).heuristic(0, 64, 0), 8 * SPRINT_FACTOR)
 })
 
 test('goal y level: any x/z', () => {
@@ -53,8 +55,8 @@ test('goal composite: met by any, bounded by the cheapest', () => {
   const g = new GoalComposite(new GoalBlock(10, 64, 10), new GoalXZ(-10, -10))
   assert.strictEqual(g.isMet(-10, 70, -10), true) // via the xz branch
   assert.strictEqual(g.isMet(0, 64, 0), false)
-  assert.ok(Math.abs(g.heuristic(9, 64, 9) - Math.SQRT2) < 1e-9) // min(octile(1,1), 19+)
-  assert.ok(Math.abs(g.heuristic(-9, 64, -9) - Math.SQRT2) < 1e-9)
+  assert.ok(Math.abs(g.heuristic(9, 64, 9) - Math.SQRT2 * SPRINT_FACTOR) < 1e-9) // min(octile(1,1), 19+), sprint-priced
+  assert.ok(Math.abs(g.heuristic(-9, 64, -9) - Math.SQRT2 * SPRINT_FACTOR) < 1e-9)
 })
 
 test('goal inverted: negates the inner goal, heuristic stays honest', () => {
@@ -78,7 +80,7 @@ test('goal follow: tracks a moving target with slack', () => {
   assert.strictEqual(g.isMet(0, 64, 0), true)
   pos = { x: 10, y: 64, z: 0 }
   assert.strictEqual(g.isMet(0, 64, 0), false)
-  assert.strictEqual(g.heuristic(0, 64, 0), 8)
+  assert.strictEqual(g.heuristic(0, 64, 0), 10 * SPRINT_FACTOR - 2)
   // target goes missing: last known position is remembered and pursued
   let gone = false
   const g2 = new GoalFollow(() => (gone ? null : { x: 5, y: 64, z: 5 }), 1)
@@ -91,7 +93,18 @@ test('goal follow: tracks a moving target with slack', () => {
 
 test('heuristics never overestimate a real walking cost', () => {
   // walking 2 north + 2 east diagonally costs 2*sqrt2 = 2.83;
-  // the heuristic must not claim more than that
+  // the heuristic must not claim more than that (sprint pricing only
+  // makes it smaller — the whole point of the sprint factor)
   const g = new GoalBlock(2, 64, 2)
   assert.ok(g.heuristic(0, 64, 0) <= 2 * Math.SQRT2 + 1e-9)
+})
+
+test('goal sprint factor: heuristics stay under sprintable route cost', () => {
+  // a straight 10-block flat run costs 10 walking, but a bot that sprints
+  // it pays ~8 (baritone: SPRINT_ONE_BLOCK_COST / WALK_ONE_BLOCK_COST
+  // = 0.769). the heuristic must stay a LOWER bound on the sprint cost,
+  // or A* would dismiss the fast straight route as "expensive".
+  const g = new GoalXZ(10, 0)
+  assert.ok(g.heuristic(0, 64, 0) <= 8.5, 'heuristic at or under sprint cost')
+  assert.ok(g.heuristic(0, 64, 0) >= 7.5, 'but still informative')
 })

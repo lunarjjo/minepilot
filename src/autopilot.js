@@ -20,10 +20,11 @@
 // close as the loaded world allows — exactly baritone's contract.
 
 const { EventEmitter } = require('events')
-const { WorldView, rulesFromSettings } = require('./engine/world')
+const { WorldView, CachedView, rulesFromSettings } = require('./engine/world')
 const { generate, DEFAULTS: MOVE_DEFAULTS } = require('./engine/moves')
 const { search, DEFAULTS: SEARCH_DEFAULTS } = require('./engine/astar')
 const { Executor } = require('./engine/executor')
+const { toolMultipliers } = require('./autotool')
 const {
   GoalBlock, GoalNear, GoalXZ, GoalYLevel, GoalFollow, GoalInverted,
   GoalAxis, GoalStrictDirection, GoalRunAway, octile
@@ -48,10 +49,10 @@ const CHUNK_LOAD_WAIT_MS = 1200
 // between "baritone setting names" and "the pathfinder's knobs".
 const ENGINE_KEYS = [
   'allowBreak', 'allowPlace', 'allowPillar', 'allowParkour', 'allowParkourAscend',
-  'allowWater', 'allowFallDamage', 'allowSprint',
-  'allowDiagonalAscend', 'allowDiagonalDescend',
+  'allowWater', 'allowFallDamage', 'allowSprint', 'allowSprintJump',
+  'allowDiagonalAscend', 'allowDiagonalDescend', 'autoTool', 'maxDigDown',
   'maxFallNoDamage', 'maxFallWithDamage', 'maxWaterLanding',
-  'walkCost', 'swimCost', 'climbCost', 'ascendCost', 'parkourCost',
+  'walkCost', 'swimCost', 'climbCost', 'ascendCost', 'descendCost', 'parkourCost',
   'fallCostPerBlock', 'fallDamageCost', 'walkBlocksPerSecond',
   'blockBreakAdditionalPenalty', 'blockPlacementPenalty', 'jumpPenalty',
   'maxNodes', 'timeoutMs'
@@ -178,11 +179,18 @@ class Autopilot extends EventEmitter {
     if (goal.isMet(start.x, start.y, start.z)) {
       return { status: 'found', moves: [], nodes: [start], cost: 0 }
     }
+    // plan with the tools we actually carry: dig costs with real tool
+    // multipliers are what make the planner dig through stone instead of
+    // detouring around it (baritone prices digs the same way)
+    this.s.toolMults = toolMultipliers(this.bot)
     // avoidance: nodes near hostiles cost extra, steering plans around
     // danger the way baritone's avoidance setting does
     const hostiles = this.hostilePositions()
+    // the search is synchronous: a snapshot cache over the live world is
+    // safe for its whole duration and cuts the block lookups to a Map hit
+    const view = new CachedView(this.view)
     const neighbors = (n) => {
-      const moves = generate(this.view, n, this.s)
+      const moves = generate(view, n, this.s)
       if (!hostiles) return moves
       for (const m of moves) {
         for (const h of hostiles.list) {

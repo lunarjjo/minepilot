@@ -322,3 +322,112 @@ test('inventory: best food prefers low-quality decent food', () => {
   assert.strictEqual(food.name, 'bread', 'eat bread before the golden apples')
   bot.disposePhysics()
 })
+
+// ------------------------------------------------- baritone-grade movement
+
+function waitIdlePilot (pilot, ms) {
+  return new Promise((resolve) => {
+    const t0 = Date.now()
+    const iv = setInterval(() => {
+      if (!pilot.executor.running || Date.now() - t0 > (ms || 30000)) {
+        clearInterval(iv)
+        resolve(!pilot.executor.running || Date.now() - t0 <= (ms || 30000))
+      }
+    }, 150)
+  })
+}
+
+test('movement: bridging a gap finishes without a splice storm', { timeout: 90000 }, async () => {
+  const w = new VoxelWorld()
+  // shelf x<=0 at floor 63; a 7-wide known-air gap; far shelf x>=8
+  w.fill(-6, 63, -2, 0, 63, 2, 'grass_block')
+  w.fill(-6, 64, -2, 0, 69, 2, 'air')
+  w.fill(1, 40, -2, 7, 69, 2, 'air') // the gap: known air, nothing below
+  w.fill(8, 63, -2, 14, 63, 2, 'grass_block')
+  w.fill(8, 64, -2, 14, 69, 2, 'air')
+  const { ctx, bot, pilot } = makeCtx(() => w)
+  bot.setInventory([{ name: 'cobblestone', count: 64, slot: -1, type: 3 }])
+  let splices = 0
+  pilot.on('splice', () => { splices++ })
+  const r = await executeCommand('goto 9 64 0', ctx)
+  assert.strictEqual(r.ok, true, r.error || 'goto started')
+  await waitIdlePilot(pilot, 60000)
+  const p = bot.entity.position
+  assert.ok(Math.abs(p.x - 9.5) < 1.2 && Math.abs(p.z - 0.5) < 1.2 && Math.abs(p.y - 64) < 1.3,
+    `arrived across the bridge at ${p.x.toFixed(1)} ${p.y.toFixed(1)} ${p.z.toFixed(1)}`)
+  assert.ok(w.blockAtXYZ(2, 63, 0).name === 'cobblestone', 'the bridge is really placed')
+  // the regression: chained bridges used to invalidate their own lookahead
+  // and replan forever without placing anything
+  assert.ok(splices <= 1, `bridge chain must not splice-storm (got ${splices})`)
+  bot.disposePhysics()
+})
+
+test('movement: digging through a wall equips the best tool', { timeout: 90000 }, async () => {
+  const w = new VoxelWorld()
+  // a floor-to-ceiling stone wall: tunneling is the only route (climbing
+  // over it is impossible — the wall reaches the world's air ceiling)
+  w.fill(-3, 63, -2, 20, 63, 2, 'grass_block')
+  w.fill(-3, 64, -2, 20, 69, 2, 'air')
+  w.fill(3, 64, -20, 4, 69, 20, 'stone')
+  const { ctx, bot, pilot } = makeCtx(() => w)
+  bot.setInventory([{ name: 'iron_pickaxe', count: 1, slot: -1, type: 4 }])
+  const r = await executeCommand('goto 7 64 0', ctx)
+  assert.strictEqual(r.ok, true, r.error || 'goto started')
+  await waitIdlePilot(pilot, 60000)
+  const p = bot.entity.position
+  assert.ok(Math.abs(p.x - 7.5) < 1.2 && Math.abs(p.y - 64) < 1.3, `tunneled through at x=${p.x.toFixed(1)}`)
+  assert.ok(bot.equips.includes('iron_pickaxe'), 'the dig swung the pickaxe, not bare hands')
+  // the tunnel opened the wall at whatever z the planner chose (diagonal
+  // routes through the 2-deep wall are legal) — assert at the bot's own z
+  const z = Math.round(p.z)
+  assert.ok(['air', 'cave_air'].includes(w.blockAtXYZ(3, 64, z).name) ||
+    ['air', 'cave_air'].includes(w.blockAtXYZ(4, 64, z).name),
+    'the wall is opened along the tunnel')
+  bot.disposePhysics()
+})
+
+test('movement: long flat straights sprint (and hop)', { timeout: 90000 }, async () => {
+  const w = new VoxelWorld()
+  w.fill(-10, 63, -3, 40, 63, 3, 'grass_block')
+  w.fill(-10, 64, -3, 40, 69, 3, 'air')
+  const { ctx, bot, pilot } = makeCtx(() => w)
+  let sawSprint = false
+  let sawHop = false
+  const iv = setInterval(() => {
+    if (bot.controls.sprint) sawSprint = true
+    if (bot.controls.sprint && bot.controls.jump) sawHop = true
+  }, 60)
+  const t0 = Date.now()
+  const r = await executeCommand('goto 25 64 0', ctx)
+  assert.strictEqual(r.ok, true, r.error || 'goto started')
+  await waitIdlePilot(pilot, 60000)
+  clearInterval(iv)
+  const secs = (Date.now() - t0) / 1000
+  const p = bot.entity.position
+  assert.ok(Math.abs(p.x - 25.5) < 1.2 && Math.abs(p.y - 64) < 1.3, `ran the straight at x=${p.x.toFixed(1)}`)
+  assert.ok(sawSprint, 'sprint engaged on the long straight')
+  assert.ok(sawHop, 'the bunny hop engaged (sprint + jump)')
+  // 25 blocks: walking takes ~5.8s, sprinting ~4.5s, sprint-jumping faster.
+  // the fake runs at sprint speed 5.6 with no jump boost, so the ceiling
+  // is generous — the point is it must not be WALKING pace (5.9s+)
+  assert.ok(secs < 6.5, `covered 25 blocks in ${secs.toFixed(1)}s`)
+  bot.disposePhysics()
+})
+
+test('movement: digging straight down reaches a lower floor safely', { timeout: 90000 }, async () => {
+  const w = new VoxelWorld()
+  // thick diggable ground over a stone floor: the goal sits 6 below the
+  // grass, dead below the bot — digdown is the only route
+  w.fill(-4, 50, -2, 6, 57, 2, 'stone')
+  w.fill(-4, 58, -2, 6, 62, 2, 'dirt')
+  w.fill(-4, 63, -2, 6, 63, 2, 'grass_block')
+  w.fill(-4, 64, -2, 6, 75, 2, 'air')
+  const { ctx, bot, pilot } = makeCtx(() => w)
+  const r = await executeCommand('goto 0 58 0', ctx)
+  assert.strictEqual(r.ok, true, r.error || 'goto started')
+  await waitIdlePilot(pilot, 60000)
+  const p = bot.entity.position
+  assert.ok(Math.abs(p.y - 58) < 1.3 && Math.abs(p.x - 0.5) < 1.2, `dug down to y=${p.y.toFixed(1)}`)
+  assert.strictEqual(w.blockAtXYZ(0, 57, 0).name, 'stone', 'landed on the stone floor')
+  bot.disposePhysics()
+})

@@ -9,6 +9,13 @@
 
 const SQRT2 = Math.SQRT2
 
+// baritone's COST_HEURISTIC is sprint-based (3.563 ticks/block vs walking
+// 4.633): a heuristic priced at walking speed OVERestimates any route the
+// bot can sprint, and an overestimating heuristic makes A* settle for
+// worse paths. 0.8 keeps the bound under the sprint-jump pace so the
+// search stays admissible AND optimal.
+const SPRINT_FACTOR = 0.8
+
 function octile (dx, dz) {
   const ax = Math.abs(dx)
   const az = Math.abs(dz)
@@ -36,7 +43,7 @@ class GoalBlock extends Goal {
   }
 
   heuristic (x, y, z) {
-    return octile(x - this.x, z - this.z) + Math.abs(y - this.y)
+    return octile(x - this.x, z - this.z) * SPRINT_FACTOR + Math.abs(y - this.y)
   }
 
   isMet (x, y, z) {
@@ -55,7 +62,7 @@ class GoalNear extends Goal {
   }
 
   heuristic (x, y, z) {
-    const h = octile(x - this.x, z - this.z) + Math.abs(y - this.y)
+    const h = octile(x - this.x, z - this.z) * SPRINT_FACTOR + Math.abs(y - this.y)
     return Math.max(0, h - this.r)
   }
 
@@ -76,7 +83,7 @@ class GoalXZ extends Goal {
   }
 
   heuristic (x, y, z) {
-    return octile(x - this.x, z - this.z)
+    return octile(x - this.x, z - this.z) * SPRINT_FACTOR
   }
 
   isMet (x, y, z) {
@@ -156,7 +163,7 @@ class GoalTwoBlocks extends Goal {
   }
 
   heuristic (x, y, z) {
-    return octile(x - this.x, z - this.z) + Math.min(Math.abs(y - this.y), Math.abs(y - (this.y - 1)))
+    return octile(x - this.x, z - this.z) * SPRINT_FACTOR + Math.min(Math.abs(y - this.y), Math.abs(y - (this.y - 1)))
   }
 
   isMet (x, y, z) {
@@ -177,7 +184,7 @@ class GoalAxis extends Goal {
   heuristic (x, y, z) {
     const axis = Math.min(Math.abs(x), Math.abs(z))
     const dy = this.y === null ? 0 : Math.abs(y - this.y)
-    return axis + dy
+    return axis * SPRINT_FACTOR + dy
   }
 
   isMet (x, y, z) {
@@ -209,7 +216,7 @@ class GoalStrictDirection extends Goal {
     const perp = Math.abs((x - this.ox) * this.dz - (z - this.oz) * this.dx)
     // remaining along-distance (bounded by straight-line distance so it
     // stays admissible)
-    const straight = octile(x - this.ox, z - this.oz)
+    const straight = octile(x - this.ox, z - this.oz) * SPRINT_FACTOR
     return Math.min(straight, along) + perp + dy
   }
 
@@ -245,7 +252,7 @@ class GoalGetToBlock extends Goal {
   }
 
   heuristic (x, y, z) {
-    return octile(x - this.x, z - this.z) + Math.abs(this.vert(y))
+    return octile(x - this.x, z - this.z) * SPRINT_FACTOR + Math.abs(this.vert(y))
   }
 
   isMet (x, y, z) {
@@ -310,7 +317,7 @@ class GoalFollow extends Goal {
   heuristic (x, y, z) {
     const p = this.target()
     if (!p) return 0
-    const h = octile(x - p.x, z - p.z) + Math.abs(y - (p.y || y))
+    const h = octile(x - p.x, z - p.z) * SPRINT_FACTOR + Math.abs(y - (p.y || y))
     return Math.max(0, h - this.r)
   }
 
@@ -326,6 +333,7 @@ class GoalFollow extends Goal {
 
 module.exports = {
   octile,
+  SPRINT_FACTOR,
   Goal,
   GoalBlock,
   GoalNear,
