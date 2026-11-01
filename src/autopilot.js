@@ -118,6 +118,17 @@ class Autopilot extends EventEmitter {
       this.emit('log', `path failed: ${(info && info.reason) || 'unknown'}`)
       this.emit('failed', info || null)
       if (this.activeJob !== 0 || this.task === 'follow' || this.task === 'idle') return
+      // a stuck path is a stumble, not a verdict — a player just tries
+      // again (the replan usually finds a different route). two retries,
+      // then the task honestly retires.
+      if (this.task === 'goto' && this.goal && (this.gotoRetries || 0) < 2 && !this.paused) {
+        this.gotoRetries = (this.gotoRetries || 0) + 1
+        this.emit('log', `retrying (${this.gotoRetries}/2)`)
+        setTimeout(() => {
+          if (this.goal && this.task === 'goto' && !this.paused) this.replan()
+        }, 800)
+        return
+      }
       this.task = 'idle'
       this.emit('task')
     })
@@ -216,6 +227,7 @@ class Autopilot extends EventEmitter {
     this.goalLabel = goal.label()
     this.partial = false
     this.consecutiveFails = 0
+    this.gotoRetries = 0
     this.partialPrevEnd = null
     this.escapeOf = null
     if (this.placeDegraded) {

@@ -47,6 +47,9 @@ const DIG_REACH = 4.0
 // field-diagnosis switch for placement problems: MINEPILOT_DEBUG_PLACE=1
 // prints every placement attempt (kind, planned vs live cell) to stderr
 const PLACE_DEBUG = process.env.MINEPILOT_DEBUG_PLACE === '1'
+// same for digs: MINEPILOT_DEBUG_DIG=1 prints every dig start + every
+// timeout with the geometry (cell, block, bot, distance)
+const DIG_DEBUG = process.env.MINEPILOT_DEBUG_DIG === '1'
 
 class Executor extends EventEmitter {
   constructor ({ bot, view, settings, Vec3 }) {
@@ -495,13 +498,26 @@ class Executor extends EventEmitter {
         // around it instead of drowning mid-swing
         const p = this.pos()
         const submerged = p && this.view.water(Math.floor(p.x), Math.floor(p.y + 1.62), Math.floor(p.z))
-        const capMs = submerged ? 6000 : 8000
+        // the cap must RESPECT the real dig time: a bare-hand cobblestone
+        // dig legitimately takes 10s, and a cap shorter than that restarts
+        // the swing forever (each restart resets progress server-side) —
+        // the exact "cannot break blocks" field report
+        let digMs = 8000
+        try {
+          if (typeof this.bot.digTime === 'function') digMs = this.bot.digTime(block)
+        } catch (e) { /* fakes */ }
+        const capMs = submerged ? Math.min(6000, Math.max(4000, digMs)) : Math.max(8000, digMs + 5000)
         // a hung dig (server never acks: occluded target, misaligned look)
         // gets ONE re-look + retry, then the movement splices into a replan
         // — a 20s dead swing was the difference between a stumble and a
         // failed path
         for (let attempt = 0; attempt < 2; attempt++) {
           this.lookAtBlock(c)
+          if (DIG_DEBUG) {
+            const p = this.pos()
+            const d = p ? Math.hypot((c.x + 0.5) - p.x, (c.y + 0.5) - (p.y + 1.62), (c.z + 0.5) - p.z) : -1
+            console.error(`[dig] ${block.name} at (${c.x},${c.y},${c.z}) bot=(${p ? p.x.toFixed(1) + ',' + p.y.toFixed(1) + ',' + p.z.toFixed(1) : '?'}) dist=${d.toFixed(1)} attempt=${attempt}`)
+          }
           try {
             const digP = this.bot.dig(block)
             // a timed-out dig may reject AFTER the race is lost (the swing
@@ -556,17 +572,21 @@ class Executor extends EventEmitter {
   // resolve the anchor block + face for a placement cell: an explicit
   // ref first (bridges), then ANY solid neighbor face (the staircase-up
   // has no fixed anchor — whatever the world offers), then below.
+  // the returned `ref` is the anchor CELL — aim the crosshair at its
+  // center: strict servers (26.3) validate the eye ray against the
+  // claimed anchor, and aiming at the destination (still air) gets the
+  // placement silently refused.
   anchorFor (c) {
     if (c.ref) {
       const b = this.blockAt(c.ref)
-      if (b) return { block: b, face: c.face || { x: 0, y: 1, z: 0 } }
+      if (b) return { block: b, ref: { x: c.ref.x, y: c.ref.y, z: c.ref.z }, face: c.face || { x: 0, y: 1, z: 0 } }
     }
     for (const a of anchorsFor(this.view, c)) {
       const b = this.blockAt(a.ref)
-      if (b) return { block: b, face: a.face }
+      if (b) return { block: b, ref: { x: a.ref.x, y: a.ref.y, z: a.ref.z }, face: a.face }
     }
     const below = this.blockAt({ x: c.x, y: c.y - 1, z: c.z })
-    if (below) return { block: below, face: { x: 0, y: 1, z: 0 } }
+    if (below) return { block: below, ref: { x: c.x, y: c.y - 1, z: c.z }, face: { x: 0, y: 1, z: 0 } }
     return null
   }
 
@@ -593,7 +613,11 @@ class Executor extends EventEmitter {
         return
       }
       if (kind === 'bridge') {
-        // stand still, sneak over the edge, click the ledge face sideways
+        // stand still, sneak over the edge, and AIM AT THE ANCHOR — the
+        // server raycasts the eye against the block the packet claims was
+        // clicked, so the crosshair must be on the anchor itself (the
+        // builder has always done it this way; aiming at the destination
+        // cell gets the placement refused on strict servers)
         const anchor = this.anchorFor(c)
         if (!anchor) {
           this.bumpPlaceTries()
@@ -601,19 +625,18 @@ class Executor extends EventEmitter {
         }
         this.control('forward', false)
         this.control('sneak', true)
-        this.lookAt(c.x, c.y, c.z, 0.5)
+        this.lookAtBlock(anchor.ref)
         await this.bot.placeBlock(anchor.block, new this.Vec3(anchor.face.x, anchor.face.y, anchor.face.z))
         setTimeout(() => this.control('sneak', false), 250)
       } else if (kind === 'ascend') {
         // staircase up: place the missing support beside us, then step
-        // onto it like a normal ascend. no sneak — the click is a side or
-        // bottom face, never over an edge
+        // onto it like a normal ascend. aim at the anchor, not the air cell
         const anchor = this.anchorFor(c)
         if (!anchor) {
           this.bumpPlaceTries()
           return
         }
-        this.lookAt(c.x, c.y, c.z, 0.4)
+        this.lookAtBlock(anchor.ref)
         await this.bot.placeBlock(anchor.block, new this.Vec3(anchor.face.x, anchor.face.y, anchor.face.z))
       } else {
         // pillar: jump, then place into the cell under our CURRENT feet.
@@ -628,9 +651,12 @@ class Executor extends EventEmitter {
         this.control('jump', true)
         let placed = false
         try {
+          // rise past 1.08 of the 1.25 apex: at exactly 1.0 the server's
+          // (slightly behind) view of the bot still overlaps the target
+          // cell and refuses the placement — the racy-pillar stumble
           const rose = await this.waitUntil(() => {
             const p = this.pos()
-            return p && p0 && p.y - p0.y >= 1.0
+            return p && p0 && p.y - p0.y >= 1.08
           }, 900)
           if (rose) {
             const p = this.pos()
@@ -643,6 +669,9 @@ class Executor extends EventEmitter {
               // its ack raced: the cell being solid is success — placing
               // again would stack another block and rocket the bot upward
               if (!this.view.solid(fx, fy, fz)) {
+                // aim straight down at the block under our feet — the eye
+                // ray must hit it for the server to accept the click
+                this.lookAtBlock({ x: fx, y: fy - 1, z: fz })
                 try {
                   await this.bot.placeBlock(below, new this.Vec3(0, 1, 0))
                 } catch (e) {
