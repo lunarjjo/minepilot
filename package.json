@@ -1,6 +1,6 @@
 {
   "name": "minepilot",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Fly ONE mineflayer bot with full baritone-style control: interactive 2D map (click to goto, drag to select), goals, mine/excavate/build/farm/explore, inventory, crafting and elytra \u2014 one web cockpit, zero build step. Tracks the newest Minecraft versions (26.x) via a self-disabling protocol overlay.",
   "main": "src/index.js",
   "scripts": {

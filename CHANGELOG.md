@@ -1,5 +1,37 @@
 # changelog
 
+## 0.4.0 — non-blocking pathfinding
+
+the stuck-bot report finally got its root cause: planning ran A\* flat on
+the game's event loop, and every long replan froze the world it was trying
+to navigate. this release moves planning onto a cooperative scheduler and
+teaches the executor to keep walking while the world changes:
+
+- **the bot stopped to think** — a replan could hold the event loop for the
+  full 3.5 s search budget: physics, packet pumps and steering all frozen,
+  the bot standing mid-stride, then teleporting when the plan landed.
+  `searchAsync()` now expands the search in cooperative time slices (a node
+  budget per slice, yielded through `setImmediate`) while the world keeps
+  ticking. the synchronous `search()` remains as the parity oracle — both
+  entries share one `stepSearch` core, and tests pin byte-identical
+  expansions, costs and node sets between them.
+- **superseded plans abort cleanly** — every planning entry takes a sequence
+  token (`planSeq`); a newer goal, a stop or a pause invalidates the
+  in-flight search through an `alive()` callback, which reports `aborted`
+  instead of degrading into a misleading partial path. replans serialize on
+  a `replanning` flag, so two splices can never race two searches, and a
+  plan landing after its world moved on is dropped without touching the
+  executor.
+- **a stale plan splices instead of stalling** — when a move stops being
+  true, the executor trims the queue to the still-valid prefix and keeps
+  walking it while the replan computes; when the prefix runs dry it reports
+  `replanwait` — never a premature `arrived`. the autopilot treats
+  replanwait as a safety net and asks for a replan if none is actually in
+  flight.
+- **#come replied "undefined"** — the command layer consumed the now-async
+  `pilot.come()` result synchronously and printed the promise itself.
+  awaited, with a regression test.
+
 ## 0.3.0 — the baritone-grade movement overhaul
 
 field reports drive this one: the bot got stuck, free-fell, took wrong

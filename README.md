@@ -172,6 +172,30 @@ no pathfinder plugin, no framework, 5 runtime dependencies (mineflayer,
 minecraft-data, vec3, ws, prismarine-nbt — the last one rides along with
 mineflayer anyway and is pinned explicitly for the schematic parser).
 
+## non-blocking pathfinding
+
+planning never blocks the game loop. the A\* core runs in cooperative time
+slices — `searchAsync()` expands a node budget, yields to the event loop,
+and keeps going — so physics, steering and packet pumps keep ticking while
+a plan computes. the synchronous `search()` shares the exact same core and
+expansion order, which makes it the parity oracle the async path is tested
+against.
+
+the planner plans against a snapshot and the executor validates at
+execution time: a move that stopped being true trims the plan to the
+still-valid prefix and keeps walking it while a replan computes; when the
+prefix runs dry the executor reports `replanwait` — never a premature
+`arrived`. superseded searches abort through an `alive()` callback instead
+of racing a newer plan:
+
+```js
+const r = await searchAsync(start, goal, neighbors, {
+  alive: () => seq === currentSeq
+})
+// r.status === 'aborted' — a newer plan superseded this one;
+// never degraded into a misleading partial path
+```
+
 ## minecraft version support
 
 minepilot tracks the newest Minecraft releases instead of waiting on the
@@ -189,7 +213,7 @@ ships a version natively, the vendored copy is skipped entirely.
 ## testing
 
 ```bash
-npm test          # 151 offline tests: engine, grammar, processes, cockpit, brain
+npm test          # 171 offline tests: engine, grammar, processes, cockpit, brain
 npm run test:live # live e2e against a running vanilla server
 ```
 
