@@ -65,7 +65,7 @@ async function digSlice (pilot, cells, alive) {
 async function stepForward (pilot, x, y, z, dx, dz, k) {
   const tx = x + dx * k
   const tz = z + dz * k
-  const r = pilot.driveTo(new GoalBlock(tx, y, tz))
+  const r = await pilot.driveTo(new GoalBlock(tx, y, tz))
   if (!r || (r.status !== 'found' && r.status !== 'partial' && r.status !== 'partial-stuck')) return false
   if (!r.moves || r.moves.length === 0) return true
   return pilot.waitArrival(15000)

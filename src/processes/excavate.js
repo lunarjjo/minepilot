@@ -80,7 +80,7 @@ async function runExcavate (pilot, from, to, alive) {
     const inOwnColumn = mine.some((o) => o.x === cell.x && o.z === cell.z && (o.y === cell.y || o.y === cell.y - 1))
     if (inOwnColumn || !withinReach(pilot, cell)) {
       const goal = new GoalNear(cell.x, cell.y, cell.z, 2)
-      const r = pilot.driveTo(goal)
+      const r = await pilot.driveTo(goal)
       if (!r || (r.status !== 'found' && r.status !== 'partial' && r.status !== 'partial-stuck')) {
         stalls++
         if (stalls > 8) throw new Error('excavate stalled: cannot reach the remaining cells')

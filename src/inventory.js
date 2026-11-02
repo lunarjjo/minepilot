@@ -273,7 +273,7 @@ async function commandChest (ctx, args) {
   const far = p ? Math.hypot(target.x + 0.5 - p.x, target.y + 0.5 - p.y, target.z + 0.5 - p.z) > 4 : true
   if (far) {
     const { GoalGetToBlock } = require('./engine/goals')
-    const r = pilot.driveTo(new GoalGetToBlock(target.x, target.y, target.z))
+    const r = await pilot.driveTo(new GoalGetToBlock(target.x, target.y, target.z))
     if (r && (r.status === 'found' || r.status === 'partial')) {
       await pilot.waitArrival(30000)
     }

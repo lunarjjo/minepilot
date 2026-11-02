@@ -22,7 +22,7 @@
 const { EventEmitter } = require('events')
 const { WorldView, CachedView, rulesFromSettings } = require('./engine/world')
 const { generate, DEFAULTS: MOVE_DEFAULTS } = require('./engine/moves')
-const { search, DEFAULTS: SEARCH_DEFAULTS } = require('./engine/astar')
+const { searchAsync, DEFAULTS: SEARCH_DEFAULTS } = require('./engine/astar')
 const { Executor } = require('./engine/executor')
 const { toolMultipliers } = require('./autotool')
 const {
@@ -80,6 +80,12 @@ class Autopilot extends EventEmitter {
     this.consecutiveFails = 0
     this.pathPointsCache = []
     this.followTimer = null
+    // planning is cooperative now: every entry and every lifecycle flip
+    // (stop, pause) bumps planSeq, which makes any in-flight search abort
+    // itself as 'aborted' instead of blocking the loop or racing a stale plan
+    this.planSeq = 0
+    this.replanning = false // one replan at a time; splices arrive faster than plans
+    this.followBusy = false
     this.jobSeq = 0
     this.activeJob = 0
     this.activeProcessName = null
@@ -184,7 +190,11 @@ class Autopilot extends EventEmitter {
     return out.length > 0 ? { radius, coeff: this.settings.get('mobAvoidanceCoefficient'), list: out } : null
   }
 
-  planNow (goal) {
+  // plan toward a goal on the time-sliced async engine. the bot keeps
+  // walking (physics, packets, steering all tick) while the search runs,
+  // and a superseded search — a newer plan, a stop, a pause — resolves as
+  // 'aborted' instead of a partial that would mislead the caller.
+  async planNow (goal) {
     const start = this.node()
     if (!start) return { status: 'nopos' }
     if (goal.isMet(start.x, start.y, start.z)) {
@@ -197,8 +207,9 @@ class Autopilot extends EventEmitter {
     // avoidance: nodes near hostiles cost extra, steering plans around
     // danger the way baritone's avoidance setting does
     const hostiles = this.hostilePositions()
-    // the search is synchronous: a snapshot cache over the live world is
-    // safe for its whole duration and cuts the block lookups to a Map hit
+    // the search runs across slices, so snapshot the world up front: a
+    // consistent stale view beats a torn fresh one, and the executor
+    // revalidates every move at execution time anyway
     const view = new CachedView(this.view)
     const neighbors = (n) => {
       const moves = generate(view, n, this.s)
@@ -214,10 +225,37 @@ class Autopilot extends EventEmitter {
       }
       return moves
     }
-    return search(start, goal, neighbors, {
+    const seq = ++this.planSeq
+    return searchAsync(start, goal, neighbors, {
       maxNodes: this.s.maxNodes,
-      timeoutMs: this.s.timeoutMs
+      timeoutMs: this.s.timeoutMs,
+      sliceNodes: this.s.sliceNodes,
+      sliceMs: this.s.sliceMs,
+      alive: () => seq === this.planSeq
     })
+  }
+
+  // trim a plan's head down to wherever the bot actually stands: planning
+  // is async, so the bot keeps moving while the search runs and the first
+  // few moves may already be behind it. matching is by exact cell — a
+  // mismatched head stays; the executor revalidates every move anyway.
+  trimPlan (r) {
+    const n = this.node()
+    if (!n || !r.moves || r.moves.length === 0) return r
+    let cut = 0
+    for (let i = 0; i < r.moves.length; i++) {
+      const to = r.moves[i].to
+      if (to.x === n.x && to.y === n.y && to.z === n.z) cut = i + 1
+    }
+    if (cut === 0) return r
+    if (cut >= r.moves.length) {
+      r.moves = []
+      r.nodes = [n]
+    } else {
+      r.moves = r.moves.slice(cut)
+      r.nodes = r.nodes.slice(cut)
+    }
+    return r
   }
 
   async launch (goal, taskLabel) {
@@ -237,12 +275,13 @@ class Autopilot extends EventEmitter {
     // the world around a fresh spawn loads in over a couple of seconds; a
     // plan against an all-fog world fails honestly but pointlessly, so
     // give the chunks a moment to arrive before declaring no path.
-    let r = this.planNow(goal)
+    let r = await this.planNow(goal)
     for (let tries = 0; r.status !== 'found' && r.status !== 'partial' && tries < CHUNK_LOAD_GRACE_TRIES; tries++) {
       await new Promise((resolve) => setTimeout(resolve, CHUNK_LOAD_WAIT_MS))
       if (this.goal !== goal) return { ok: false, error: 'superseded' }
-      r = this.planNow(goal)
+      r = await this.planNow(goal)
     }
+    if (r.status === 'aborted') return { ok: false, error: 'superseded' }
     if (process.env.MINEPILOT_DEBUG_PLAN === '1') {
       this.emit('log', `plan ${r.status}: ${r.moves ? r.moves.length : 0} moves, ${r.expanded || 0} nodes, endH ${Number(r.endHeuristic || 0).toFixed(1)}`)
     }
@@ -293,26 +332,37 @@ class Autopilot extends EventEmitter {
     }, wait)
   }
 
-  replan () {
+  async replan () {
     if (!this.goal || this.task === 'idle' || this.paused) return
-    const r = this.planNow(this.goal)
-    if (r.status === 'found' || r.status === 'partial') {
-      this.lastReplanAt = Date.now()
-      this.partial = r.status === 'partial'
-      this.pathPointsCache = nodesToPoints(r.nodes)
-      if (this.partial && !this.trackPartialEnd(r)) return
-      this.executor.replans++
-      this.executor.run(r.moves)
-      this.emit('path', { points: this.pathPointsCache, goal: this.goalLabel, partial: this.partial })
-    } else {
-      this.consecutiveFails++
-      this.emit('log', `replan failed (${this.consecutiveFails}/${MAX_CONSECUTIVE_FAILS})`)
-      if (this.consecutiveFails >= MAX_CONSECUTIVE_FAILS) {
-        this.executor.stop()
-        this.executor.emit('failed', { reason: 'no path' })
+    if (this.replanning) return // a newer splice will requeue itself
+    this.replanning = true
+    try {
+      const r = await this.planNow(this.goal)
+      // the world moved on while we planned: goal cleared, task retired or
+      // a pause landed — drop the stale plan without touching the executor
+      if (!this.goal || this.task === 'idle' || this.paused) return
+      if (r.status === 'aborted') return // superseded by a newer plan
+      if (r.status === 'found' || r.status === 'partial') {
+        this.lastReplanAt = Date.now()
+        this.partial = r.status === 'partial'
+        this.pathPointsCache = nodesToPoints(r.nodes)
+        if (this.partial && !this.trackPartialEnd(r)) return
+        this.trimPlan(r)
+        this.executor.replans++
+        this.executor.run(r.moves)
+        this.emit('path', { points: this.pathPointsCache, goal: this.goalLabel, partial: this.partial })
       } else {
-        setTimeout(() => this.replan(), 600)
+        this.consecutiveFails++
+        this.emit('log', `replan failed (${this.consecutiveFails}/${MAX_CONSECUTIVE_FAILS})`)
+        if (this.consecutiveFails >= MAX_CONSECUTIVE_FAILS) {
+          this.executor.stop()
+          this.executor.emit('failed', { reason: 'no path' })
+        } else {
+          setTimeout(() => this.replan(), 600)
+        }
       }
+    } finally {
+      this.replanning = false
     }
   }
 
@@ -341,10 +391,20 @@ class Autopilot extends EventEmitter {
       const land = this.nearestDryCell(n)
       if (land) {
         if (this.goal && this.task === 'goto') this.escapeOf = { goal: this.goal, task: this.task }
-        const r = this.driveTo(new GoalBlock(land.x, land.y, land.z))
-        if (r && (r.status === 'found' || r.status === 'partial')) return
+        // driveTo plans asynchronously now; when the escape plan comes back
+        // unusable (or fails), settle here instead of reporting arrival early
+        this.driveTo(new GoalBlock(land.x, land.y, land.z))
+          .then((r) => {
+            if (!(r && (r.status === 'found' || r.status === 'partial'))) this.settleArrival()
+          })
+          .catch(() => this.settleArrival())
+        return
       }
     }
+    this.settleArrival()
+  }
+
+  settleArrival () {
     this.emit('arrived', { goal: this.goalLabel })
     // baritone keeps the goal set after arrival (#eta reports done, a new
     // #path re-walks it); the TASK retires but the goal object stays.
@@ -382,6 +442,7 @@ class Autopilot extends EventEmitter {
   pause (by) {
     if (this.paused) return { ok: true, reply: 'already paused' }
     this.paused = true
+    this.planSeq++ // any in-flight plan aborts as 'aborted', not 'partial'
     this.pausedBy = by || 'user'
     this.executor.stop()
     this.emit('log', `paused by ${this.pausedBy}`)
@@ -431,6 +492,31 @@ class Autopilot extends EventEmitter {
     return this.launch(goal, 'goto')
   }
 
+  // one follow refresh at a time: the plan is async, so a slow search must
+  // not stack behind a newer one on the next tick of the timer
+  refreshFollow () {
+    if (this.followBusy) return
+    this.followBusy = true
+    this.planNow(this.goal)
+      .then((r) => {
+        this.followBusy = false
+        if (this.task !== 'follow' || this.paused) return
+        if (r.status !== 'found' && r.status !== 'partial') return
+        const cur = this.executor.queue.length
+          ? this.executor.queue[this.executor.queue.length - 1].to
+          : null
+        const t = this.goal.target()
+        if (!cur || !t || Math.abs(cur.x - t.x) + Math.abs(cur.z - t.z) > 2) {
+          this.trimPlan(r)
+          this.pathPointsCache = nodesToPoints(r.nodes)
+          this.executor.replans++
+          this.executor.run(r.moves)
+          this.emit('path', { points: this.pathPointsCache, goal: this.goalLabel, partial: r.status === 'partial' })
+        }
+      })
+      .catch(() => { this.followBusy = false })
+  }
+
   follow (getPosition, radius) {
     if (this.paused) this.resumeInternal()
     this.stopFollowTimer()
@@ -441,19 +527,7 @@ class Autopilot extends EventEmitter {
     this.replan()
     this.followTimer = setInterval(() => {
       if (this.task !== 'follow' || this.paused) return
-      const r = this.planNow(this.goal)
-      if (r.status === 'found' || r.status === 'partial') {
-        const cur = this.executor.queue.length
-          ? this.executor.queue[this.executor.queue.length - 1].to
-          : null
-        const t = this.goal.target()
-        if (!cur || !t || Math.abs(cur.x - t.x) + Math.abs(cur.z - t.z) > 2) {
-          this.pathPointsCache = nodesToPoints(r.nodes)
-          this.executor.replans++
-          this.executor.run(r.moves)
-          this.emit('path', { points: this.pathPointsCache, goal: this.goalLabel, partial: r.status === 'partial' })
-        }
-      }
+      this.refreshFollow()
     }, FOLLOW_REFRESH_MS)
     this.emit('task')
     return { ok: true, reply: 'following' }
@@ -626,8 +700,8 @@ class Autopilot extends EventEmitter {
   // from inside a process loop (the task label stays the process's).
   // a stale plan must be able to splice + replan: mark the task active
   // when called with no task set, or replan() would refuse to run.
-  driveTo (goal) {
-    const r = this.planNow(goal)
+  async driveTo (goal) {
+    const r = await this.planNow(goal)
     if (r.status !== 'found' && r.status !== 'partial') return r
     this.goal = goal
     this.goalLabel = goal.label()
@@ -638,6 +712,7 @@ class Autopilot extends EventEmitter {
     this.partial = r.status === 'partial'
     this.pathPointsCache = nodesToPoints(r.nodes)
     if (this.partial && !this.trackPartialEnd(r)) return { status: 'partial-stuck' }
+    this.trimPlan(r)
     this.executor.run(r.moves)
     this.emit('path', {
       points: this.pathPointsCache,
@@ -792,6 +867,7 @@ class Autopilot extends EventEmitter {
     this.pathPointsCache = []
     this.paused = false
     this.pausedBy = null
+    this.planSeq++ // abort whatever search is still slicing in the background
     this.executor.stop()
     this.emit('task')
   }

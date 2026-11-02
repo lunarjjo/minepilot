@@ -62,7 +62,7 @@ async function runBackfill (pilot, cells, alive) {
     if (!pilot.view.passable(cell.x, cell.y, cell.z)) continue
     const p2 = pilot.pos()
     if (p2 && Math.hypot(cell.x - p2.x, cell.y - p2.y, cell.z - p2.z) > 4.5) {
-      const r = pilot.driveTo(new GoalNear(cell.x, cell.y, cell.z, 1))
+      const r = await pilot.driveTo(new GoalNear(cell.x, cell.y, cell.z, 1))
       if (!r || (r.status !== 'found' && r.status !== 'partial' && r.status !== 'partial-stuck')) {
         stalls++
         if (stalls > 4) break

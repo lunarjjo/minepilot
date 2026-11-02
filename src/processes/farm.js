@@ -73,7 +73,7 @@ async function harvest (pilot, target, alive) {
   // walk adjacent to the crop
   if (!pilot.isNearCell(x, y, z, 3)) {
     const goal = new GoalNear(x, y, z, 1)
-    const r = pilot.driveTo(goal)
+    const r = await pilot.driveTo(goal)
     if (!r || (r.status !== 'found' && r.status !== 'partial')) return false
     const ok = await pilot.waitArrival()
     if (!ok) return false

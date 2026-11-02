@@ -162,7 +162,7 @@ async function runElytra (pilot, x, z, alive) {
     if (dist <= targetRadius) {
       await stopGlide(bot)
       // walk the last blocks precisely
-      const r = pilot.driveTo(new GoalXZ(Math.floor(x), Math.floor(z)))
+      const r = await pilot.driveTo(new GoalXZ(Math.floor(x), Math.floor(z)))
       if (r && (r.status === 'found' || r.status === 'partial')) {
         await pilot.waitArrival(30000)
       }
@@ -191,7 +191,7 @@ async function runElytra (pilot, x, z, alive) {
     if (!airborneOnly(bot) && speed < GLIDE_MIN_SPEED && Math.abs(vy) < 0.05 && alt < 2) {
       await stopGlide(bot)
       // out of the sky: walk the rest
-      const r = pilot.driveTo(new GoalXZ(Math.floor(x), Math.floor(z)))
+      const r = await pilot.driveTo(new GoalXZ(Math.floor(x), Math.floor(z)))
       if (r && (r.status === 'found' || r.status === 'partial')) {
         await pilot.waitArrival(60000)
       }

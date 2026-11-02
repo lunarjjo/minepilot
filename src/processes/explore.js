@@ -86,7 +86,7 @@ async function runExplore (pilot, radius, alive, opts) {
       return { legs }
     }
     const goal = new GoalXZ(target.x, target.z)
-    const r = pilot.driveTo(goal)
+    const r = await pilot.driveTo(goal)
     if (!r || (r.status !== 'found' && r.status !== 'partial')) {
       // unreachable for now: remember it, try the next target
       visited.add(target.k)

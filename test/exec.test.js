@@ -95,6 +95,18 @@ test('exec: goal sets without moving, path then walks', async () => {
   assert.strictEqual(pilot.task, 'goto')
 })
 
+test('exec: come awaits the async plan and replies properly', async () => {
+  const { ctx, lines } = makeCtx(flatWorld)
+  ctx.commander = { name: 'Kasyaira', entity: { position: new Vec3(0, 64, 0) } }
+  const r = await executeCommand('come', ctx)
+  assert.strictEqual(r.ok, true)
+  // the reply used to be "undefined": the result promise was consumed
+  // synchronously before the async migration
+  assert.ok(lines.some((l) => typeof l === 'string' && l.includes('heading to Kasyaira')),
+    `replied with: ${JSON.stringify(lines)}`)
+  assert.ok(!lines.some((l) => String(l) === 'undefined'), 'no undefined reply')
+})
+
 test('exec: damn daniel answers properly', async () => {
   const { ctx, lines } = makeCtx(flatWorld)
   await executeCommand('damn daniel', ctx)

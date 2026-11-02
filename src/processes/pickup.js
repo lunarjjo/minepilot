@@ -36,7 +36,7 @@ async function runPickup (pilot, radius, alive) {
     if (items.length === 0) break
     const target = items[0]
     const goal = new GoalNear(Math.floor(target.position.x), Math.floor(target.position.y), Math.floor(target.position.z), 0)
-    const r = pilot.planNow(goal)
+    const r = await pilot.planNow(goal)
     if (r.status !== 'found' && r.status !== 'partial') break
     pilot.executor.run(r.moves)
     await pilot.waitArrival(15000)

@@ -72,7 +72,7 @@ function taskDist (pilot, t) {
 // stand somewhere the target cell stops intersecting our body
 async function stepAside (pilot, cell) {
   const goal = new GoalNear(cell.x, cell.y, cell.z, 2)
-  const r = pilot.driveTo(goal)
+  const r = await pilot.driveTo(goal)
   if (!r || (r.status !== 'found' && r.status !== 'partial')) return false
   const ok = await pilot.waitArrival()
   const mine = ownCells(pilot) || []
@@ -87,7 +87,7 @@ async function doDig (pilot, cell) {
     if (!moved) return false
   } else if (!withinReach(pilot, cell)) {
     const goal = new GoalNear(cell.x, cell.y, cell.z, 2)
-    const r = pilot.driveTo(goal)
+    const r = await pilot.driveTo(goal)
     if (!r || (r.status !== 'found' && r.status !== 'partial')) return false
     const ok = await pilot.waitArrival()
     if (!ok) return false
@@ -108,7 +108,7 @@ async function doPlace (pilot, cell, blockName) {
     if (!moved) return false
   } else if (!withinReach(pilot, cell)) {
     const goal = new GoalNear(cell.x, cell.y, cell.z, 2)
-    const r = pilot.driveTo(goal)
+    const r = await pilot.driveTo(goal)
     if (!r || (r.status !== 'found' && r.status !== 'partial')) return false
     const ok = await pilot.waitArrival()
     if (!ok) return false

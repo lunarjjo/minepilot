@@ -193,7 +193,7 @@ async function waitPickup (pilot) {
       const z = Math.floor(item.position.z)
       let arrived = false
       for (const radius of [1, 2]) {
-        const r = pilot.driveTo(new GoalNear(x, y, z, radius))
+        const r = await pilot.driveTo(new GoalNear(x, y, z, radius))
         if (r && (r.status === 'found' || r.status === 'partial')) {
           if (r.moves && r.moves.length > 0) {
             await pilot.waitArrival(10000)
@@ -227,7 +227,7 @@ async function runMine (pilot, names, count, alive) {
     // wiring alive: if the plan goes stale (the bot fell into the vein,
     // the world changed), splices trigger real replans.
     const goal = new GoalNear(target.x, target.y, target.z, 1)
-    const r = pilot.driveTo(goal)
+    const r = await pilot.driveTo(goal)
     if (!r || (r.status !== 'found' && r.status !== 'partial' && r.status !== 'partial-stuck')) {
       if (pilot.settings && pilot.settings.get('blacklistClosestOnFailure')) {
         blacklist.add(target.x + ',' + target.y + ',' + target.z)
@@ -265,7 +265,7 @@ async function runMine (pilot, names, count, alive) {
         for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
           const sx = target.x + dx
           const sz = target.z + dz
-          const r = pilot.driveTo(new GoalNear(sx, Math.floor(p.y), sz, 0))
+          const r = await pilot.driveTo(new GoalNear(sx, Math.floor(p.y), sz, 0))
           if (r && (r.status === 'found' || r.status === 'partial')) {
             if (r.moves && r.moves.length > 0) await pilot.waitArrival(15000)
             const p2 = pilot.pos()

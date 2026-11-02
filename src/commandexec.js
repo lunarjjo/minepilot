@@ -288,7 +288,7 @@ async function dispatchCommand (name, args, ctx, refs) {
         reply('come needs a player caller — use goto <x> <z> instead')
         return { ok: false, error: 'no commander' }
       }
-      const r = pilot.come(pos)
+      const r = await pilot.come(pos)
       if (r.ok) reply(`heading to ${who}`)
       else reply(r.error)
       return r

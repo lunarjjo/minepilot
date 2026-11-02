@@ -73,7 +73,7 @@ async function walkToEntity (pilot, e, reach) {
   if (!p || !e.position) return false
   if (e.position.distanceTo(p) <= reach) return true
   const { GoalGetToBlock } = require('./engine/goals')
-  const r = pilot.driveTo(new GoalGetToBlock(Math.floor(e.position.x), Math.floor(e.position.y), Math.floor(e.position.z)))
+  const r = await pilot.driveTo(new GoalGetToBlock(Math.floor(e.position.x), Math.floor(e.position.y), Math.floor(e.position.z)))
   if (!r || (r.status !== 'found' && r.status !== 'partial')) return false
   await pilot.waitArrival(30000)
   return true
@@ -140,7 +140,7 @@ async function sleepInBed (ctx) {
   const target = nearestBed(pilot, 16)
   if (!target) return { ok: false, error: 'no bed within 16 blocks' }
   const { GoalGetToBlock } = require('./engine/goals')
-  const r = pilot.driveTo(new GoalGetToBlock(target.x, target.y, target.z))
+  const r = await pilot.driveTo(new GoalGetToBlock(target.x, target.y, target.z))
   if (r && (r.status === 'found' || r.status === 'partial')) {
     await pilot.waitArrival(30000)
   }

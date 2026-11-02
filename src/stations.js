@@ -97,7 +97,7 @@ function createStationManager (ctx, broadcast, log) {
     const far = dist({ x: target.x + 0.5, y: target.y + 0.5, z: target.z + 0.5 }, p) > reach
     if (!far) return true
     const { GoalGetToBlock } = require('./engine/goals')
-    const r = pilot.driveTo(new GoalGetToBlock(target.x, target.y, target.z))
+    const r = await pilot.driveTo(new GoalGetToBlock(target.x, target.y, target.z))
     if (!r || (r.status !== 'found' && r.status !== 'partial')) return false
     await pilot.waitArrival(30000)
     return true

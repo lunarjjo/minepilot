@@ -49,7 +49,7 @@ async function runGetToBlock (pilot, name, alive) {
   const target = findNearestBlock(pilot, name, pilot.settings ? pilot.settings.get('mineScanRadius') : 64)
   if (!target) throw new Error(`no ${name} found in range`)
   const goal = new GoalGetToBlock(target.x, target.y, target.z)
-  const r = pilot.driveTo(goal)
+  const r = await pilot.driveTo(goal)
   if (!r || (r.status !== 'found' && r.status !== 'partial')) {
     throw new Error(`cannot reach any ${name}`)
   }
@@ -65,7 +65,7 @@ async function runGetToBlock (pilot, name, alive) {
 // resolves true when the activation went through.
 async function runClick (pilot, x, y, z, alive) {
   const goal = new GoalGetToBlock(x, y, z)
-  const r = pilot.driveTo(goal)
+  const r = await pilot.driveTo(goal)
   if (r && (r.status === 'found' || r.status === 'partial') && r.moves && r.moves.length > 0) {
     await pilot.waitArrival(60000)
   }

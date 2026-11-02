@@ -66,7 +66,7 @@ async function runCombat (pilot, target, alive) {
     if (d > REACH) {
       // walk to it — the goal follows the live entity position
       const goal = new GoalNear(Math.floor(entity.position.x), Math.floor(entity.position.y), Math.floor(entity.position.z), 2)
-      const r = pilot.planNow(goal)
+      const r = await pilot.planNow(goal)
       if (r.status !== 'found' && r.status !== 'partial') {
         misses++
         if (misses > 8) throw new Error(`cannot reach the ${target}`)
