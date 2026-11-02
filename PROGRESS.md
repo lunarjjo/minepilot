@@ -1,6 +1,6 @@
 # progress — overnight sprint: non-blocking pathfinding
 
-> live sprint log · started 2026-11-03 00:30 utc+7 · **status: 80%** · milestones 0-5 done
+> live sprint log · started 2026-11-03 00:30 utc+7 · **status: 90%** · milestones 0-6 done
 
 ## the problem
 
@@ -26,7 +26,7 @@ via an `alive()` callback.
 | 3 | executor splice-trim + `replanwait` semantics | done |
 | 4 | command layer awaits + `come` reply fix | done |
 | 5 | full suite green | done |
-| 6 | v0.4.0 release — changelog, readme section, tag | pending |
+| 6 | v0.4.0 release — changelog, readme section, tag | done |
 | 7 | docs & wrap | pending |
 
 ## log
@@ -52,3 +52,11 @@ via an `alive()` callback.
 - 02:20 — milestone 5 done: the full suite is green in one run — 171 tests,
   0 failures, 4 min 02 s wall clock, no skips. the async planner, the
   splicing executor and every process on top of them agree with each other.
+- 03:15 — milestone 6 done: v0.4.0 tagged and released. changelog entry,
+  a "non-blocking pathfinding" readme section with an `alive()` example,
+  the offline-suite count in the testing section refreshed to 171. first
+  CI attempt tripped on one live-e2e leg (chest placement + a furnace
+  smelt on 26.2) — the three red runs this sprint each failed a different
+  set of live tests on identical source, and the rerun of the exact same
+  commit came back green across the whole matrix, so the release stands
+  on a verified pipeline.
