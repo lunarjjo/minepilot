@@ -64,3 +64,7 @@ via an `alive()` callback.
   small and precise). first pass: four unit tests pinning `trimPlan`'s
   head-trim contract — the async-planning trim that was only exercised
   indirectly until now. 175 offline tests green.
+- 03:50 — the timeout path finally has a test: a controllable clock fires
+  the probe on the first loop pass, and `searchAsync`'s timeout result must
+  be deep-equal to the sync oracle's — same status, expanded, partial flag.
+  no more wall-clock racing in tests. 176 offline tests green.
