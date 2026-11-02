@@ -189,9 +189,10 @@ test('full-auto progression: logs to stone tools against the fake world', async 
   // drive the brain manually: the tick loop is fire-and-forget (reflexes
   // keep ticking while activities run in the background), so the budget
   // is WALL TIME, not iterations — the activities need real seconds to
-  // mine and craft. the cadence is tight (50 ms) on purpose: tick() is
-  // re-entrancy-guarded, so faster ticks only shave the idle gap between
-  // one activity finishing and the next decision launching. the 300s
+  // mine and craft. the cadence is 250 ms deliberately: a 50 ms loop was
+  // tried and reverted — twenty snapshots a second starve the fake
+  // physics on a loaded 2-core runner and the ladder busted the 300 s
+  // budget in ci, while the same loop breezed through locally. the 300s
   // budget covers a slow 2-core ci runner: a throw before dispose()
   // leaves the executor's ref'd timer alive, which holds the node:test
   // child open forever — the ci hang was exactly a failed assert skipping
@@ -201,7 +202,7 @@ test('full-auto progression: logs to stone tools against the fake world', async 
   try {
     while (Date.now() - t0 < 300000) {
       await brain.tick()
-      await sleep(50)
+      await sleep(250)
       ticks++
       if (has('stone_pickaxe') > 0 && has('torch') > 0) break
     }
