@@ -103,3 +103,29 @@ test('astar async: unreachable far goal still degrades to the best partial', asy
   const end = r.moves[r.moves.length - 1].to
   assert.strictEqual(end.x, 2, 'walked to the last known block east')
 })
+
+test('astar async: timeout parity — both entries report the identical timeout', async () => {
+  const v = viewOf(flat())
+  const goal = new GoalXZ(30, 0)
+  const n = neighborsOf(v)
+  const start = { x: 0, y: 64, z: 0 }
+
+  // a controllable clock: the FIRST read seeds t0, every later read sits
+  // 100ms in the future — the timeout probe fires on the very first loop
+  // pass (expanded === 0) in both entry points. that pins the timeout path
+  // deterministically instead of racing a wall clock against a fixture
+  const withFakeClock = (fn) => {
+    const realNow = Date.now
+    let calls = 0
+    Date.now = () => (calls++ === 0 ? realNow() : realNow() + 100)
+    try { return fn() } finally { Date.now = realNow }
+  }
+
+  const sync = withFakeClock(() => search(start, goal, n, { timeoutMs: 10 }))
+  const sliced = await withFakeClock(() => searchAsync(start, goal, n, { timeoutMs: 10, sliceNodes: 7 }))
+
+  assert.strictEqual(sync.status, 'timeout')
+  assert.strictEqual(sync.expanded, 0, 'the clock fired before the first expansion')
+  assert.strictEqual(sync.partial, true, 'a timeout is reported as partial')
+  assert.deepStrictEqual(sliced, sync, 'async timeout is byte-identical to the sync oracle')
+})
