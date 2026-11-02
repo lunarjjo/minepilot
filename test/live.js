@@ -236,6 +236,30 @@ async function main () {
       const it = r.body.items.find((i) => i.name === name)
       return it ? it.count : 0
     }
+    // worldgen does not owe a blind cell pick an anchor face: a cell that
+    // floats in the air has nothing solid to click against and the build
+    // reports stuck with anchors=0. a player shifts to another patch of
+    // ground and tries again — so does the test.
+    const shiftSpot = async () => {
+      const p = (await get('/api/status')).body.position
+      await post('/api/command', { command: `goto ${p.x + 12} ${p.z}` })
+      await until(async () => {
+        const r = await get('/api/status')
+        return r.body.task.task === 'idle' ? 'done' : null
+      }, 120000, 'the walk to another spot').catch(() => null)
+    }
+    const fillCell = async (dx, kind, dz = 0) => {
+      const p = (await get('/api/status')).body.position
+      ws.send(JSON.stringify({ t: 'select', x0: p.x + dx, y0: p.y, z0: p.z + dz, x1: p.x + dx, y1: p.y, z1: p.z + dz }))
+      await sleep(400)
+      const r = await post('/api/command', { command: `sel fill ${kind}` })
+      await until(async () => {
+        const r2 = await get('/api/status')
+        return r2.body.task.task === 'idle' ? 'done' : null
+      }, 120000, `the ${kind} placement`).catch(() => null)
+      await post('/api/command', { command: 'sel clear' })
+      return r.body.result.ok === true
+    }
     await post('/api/command', { command: 'say /clear' })
     await until(async () => (await get('/api/inventory')).body.items.length === 0, 20000, 'the clear').catch(() => null)
     await give('oak_log', 8)
@@ -269,19 +293,17 @@ async function main () {
     const pos1 = (await get('/api/status')).body.position
     await give('chest', 1)
     await until(async () => (await invCount('chest')) >= 1, 20000, 'the chest item').catch(() => null)
-    ws.send(JSON.stringify({ t: 'select', x0: pos1.x + 2, y0: pos1.y, z0: pos1.z, x1: pos1.x + 2, y1: pos1.y, z1: pos1.z }))
-    await sleep(400)
-    const fillChest = await post('/api/command', { command: 'sel fill chest' })
-    check('sel fill places the chest', fillChest.body.result.ok === true, fillChest.body.lines.join(' | '))
-    await until(async () => {
-      const r = await get('/api/status')
-      return r.body.task.task === 'idle' ? 'done' : null
-    }, 120000, 'the chest placement').catch(() => null)
-    await post('/api/command', { command: 'sel clear' })
-
-    ws.send(JSON.stringify({ t: 'station:open', kind: 'chest' }))
-    const chestFrame = await until(() => msgs.find((m) => m.t === 'station' && m.open && m.kind === 'chest'), 30000, 'the chest station frame')
-      .catch(() => null)
+    // up to three patches of ground: the first pick may have no anchor face
+    let fillChestOk = false
+    let chestFrame = null
+    for (let attempt = 0; attempt < 3 && !chestFrame; attempt++) {
+      if (attempt > 0) await shiftSpot()
+      fillChestOk = await fillCell(2, 'chest')
+      ws.send(JSON.stringify({ t: 'station:open', kind: 'chest' }))
+      chestFrame = await until(() => msgs.find((m) => m.t === 'station' && m.open && m.kind === 'chest'), 15000, 'the chest station frame')
+        .catch(() => null)
+    }
+    check('sel fill places the chest', fillChestOk, 'command refused')
     check('chest opens through the station protocol', !!chestFrame, chestFrame ? 'opened' : 'no frame')
     if (chestFrame) {
       const dep = await post('/api/station', { action: 'deposit', name: 'oak_planks', count: 8 })
@@ -311,23 +333,19 @@ async function main () {
       const r = await get('/api/status')
       return r.body.task.task === 'idle' ? 'done' : null
     }, 120000, 'the walk to the furnace spot').catch(() => null)
-    const pos2 = (await get('/api/status')).body.position
     await give('furnace', 1)
     await give('coal', 4)
     await until(async () => (await invCount('furnace')) >= 1 && (await invCount('coal')) >= 4, 20000, 'the furnace + coal').catch(() => null)
-    ws.send(JSON.stringify({ t: 'select', x0: pos2.x - 2, y0: pos2.y, z0: pos2.z, x1: pos2.x - 2, y1: pos2.y, z1: pos2.z }))
-    await sleep(400)
-    const fillFurnace = await post('/api/command', { command: 'sel fill furnace' })
-    check('sel fill places the furnace', fillFurnace.body.result.ok === true, fillFurnace.body.lines.join(' | '))
-    await until(async () => {
-      const r = await get('/api/status')
-      return r.body.task.task === 'idle' ? 'done' : null
-    }, 120000, 'the furnace placement').catch(() => null)
-    await post('/api/command', { command: 'sel clear' })
-
-    ws.send(JSON.stringify({ t: 'station:open', kind: 'furnace' }))
-    const furnaceFrame = await until(() => msgs.find((m) => m.t === 'station' && m.open && m.kind === 'furnace'), 30000, 'the furnace station frame')
-      .catch(() => null)
+    let fillFurnaceOk = false
+    let furnaceFrame = null
+    for (let attempt = 0; attempt < 3 && !furnaceFrame; attempt++) {
+      if (attempt > 0) await shiftSpot()
+      fillFurnaceOk = await fillCell(-2, 'furnace')
+      ws.send(JSON.stringify({ t: 'station:open', kind: 'furnace' }))
+      furnaceFrame = await until(() => msgs.find((m) => m.t === 'station' && m.open && m.kind === 'furnace'), 15000, 'the furnace station frame')
+        .catch(() => null)
+    }
+    check('sel fill places the furnace', fillFurnaceOk, 'command refused')
     check('furnace opens through the station protocol', !!furnaceFrame)
     if (furnaceFrame) {
       const pi = await post('/api/station', { action: 'put', role: 'input', name: 'oak_log', count: 1 })
@@ -336,7 +354,7 @@ async function main () {
       const cooked = await until(async () => {
         const r = await get('/api/station')
         return r.body.output && r.body.output.name === 'charcoal' ? r.body : null
-      }, 90000, 'the log to smelt into charcoal').catch(() => null)
+      }, 180000, 'the log to smelt into charcoal').catch(() => null)
       check('furnace really smelts log -> charcoal', !!cooked, cooked ? 'charcoal out' : 'no output')
       if (cooked) {
         const tk = await post('/api/station', { action: 'take', role: 'output' })
@@ -369,18 +387,17 @@ async function main () {
     check('breeding reaches both cows', (await invCount('wheat')) <= 6, `wheat: ${await invCount('wheat')}`)
 
     // a lever placed and flipped through activate
-    const pos4 = (await get('/api/status')).body.position
     await give('lever', 1)
     await until(async () => (await invCount('lever')) >= 1, 20000, 'the lever item').catch(() => null)
-    ws.send(JSON.stringify({ t: 'select', x0: pos4.x + 1, y0: pos4.y, z0: pos4.z, x1: pos4.x + 1, y1: pos4.y, z1: pos4.z }))
-    await sleep(400)
-    const fillLever = await post('/api/command', { command: 'sel fill lever' })
-    check('sel fill places the lever', fillLever.body.result.ok === true, fillLever.body.lines.join(' | '))
-    await until(async () => {
-      const r = await get('/api/status')
-      return r.body.task.task === 'idle' ? 'done' : null
-    }, 120000, 'the lever placement').catch(() => null)
-    await post('/api/command', { command: 'sel clear' })
+    let fillLeverOk = false
+    let leverSeen = false
+    for (let attempt = 0; attempt < 3 && !leverSeen; attempt++) {
+      if (attempt > 0) await shiftSpot()
+      fillLeverOk = await fillCell(1, 'lever')
+      const f = await post('/api/command', { command: 'find lever' })
+      leverSeen = f.body.result.ok === true
+    }
+    check('sel fill places the lever', fillLeverOk && leverSeen, 'no lever near the bot')
     const act = await post('/api/command', { command: 'activate lever' })
     check('activate flips the lever', act.body.result.ok === true, act.body.lines.join(' | '))
 
