@@ -14,12 +14,15 @@
 //             baritone cover flat ground absurdly fast
 //   validate  the near future is re-checked with a CHEAP per-move
 //             validator every other tick; the first move that stops being
-//             true forces a splice (replan), never a blind walk into a
-//             wall the world just placed there. (the old validator
-//             regenerated the full movement list and doomed chained
-//             placements — a bridge's next move never "existed" until the
-//             current one placed its block, so bridging replanned forever
-//             without placing anything)
+//             true TRIMS the queue to the still-valid prefix and keeps
+//             walking it while a replan computes — never a blind walk
+//             into a wall the world just placed there, and never a dead
+//             standstill mid-stride either. when the trimmed prefix runs
+//             dry the executor says 'replanwait', not a premature
+//             'arrived'. (the old validator regenerated the full movement
+//             list and doomed chained placements — a bridge's next move
+//             never "existed" until the current one placed its block, so
+//             bridging replanned forever without placing anything)
 //   dig       movements that break through blocks dig them FIRST, with
 //             the best tool equipped (autoTool), from within reach
 //   place     pillar/bridge/ascendPlace movements place before stepping
@@ -73,6 +76,7 @@ class Executor extends EventEmitter {
     this.replans = 0
     this.tickCount = 0
     this.sprinting = false
+    this.awaitingReplan = false
   }
 
   // ---- lifecycle -------------------------------------------------------
@@ -90,6 +94,7 @@ class Executor extends EventEmitter {
     this.noMaterial = false
     this.tickCount = 0
     this.sprinting = false
+    this.awaitingReplan = false
     if (this.queue.length === 0) {
       this.finish('arrived')
       return
@@ -105,6 +110,7 @@ class Executor extends EventEmitter {
     this.running = false
     this.digging = false
     this.sprinting = false
+    this.awaitingReplan = false
     this.clearControls()
   }
 
@@ -162,7 +168,12 @@ class Executor extends EventEmitter {
   tick () {
     if (!this.running || this.digging) return
     const m = this.current()
-    if (!m) return
+    if (!m) {
+      // the plan ran dry — a splice trimmed it away and the walk consumed
+      // the valid prefix: hold here and say so, never a false 'arrived'
+      if (this.awaitingReplan) this.finish('replanwait')
+      return
+    }
     const p = this.pos()
     if (!p) return
     this.tickCount++
@@ -175,8 +186,14 @@ class Executor extends EventEmitter {
         const f = this.queue[this.index + ahead]
         if (!f) break
         if (!validateMove(this.view, f)) {
+          // the world changed under the plan: keep the still-valid prefix
+          // and walk it out while the replan computes, instead of freezing
+          // mid-stride and re-splicing into the same wall every other tick
+          this.queue = this.queue.slice(0, this.index + ahead)
+          this.awaitingReplan = true
           this.emit('splice', { at: this.index + ahead, reason: 'world changed' })
-          return
+          if (ahead === 0) return // nothing valid left this tick
+          break
         }
       }
     }
@@ -393,7 +410,9 @@ class Executor extends EventEmitter {
     this.placeTries = 0
     this.emit('progress', { index: this.index, total: this.queue.length })
     if (this.index >= this.queue.length) {
-      this.finish('arrived')
+      // walked out the plan — but a plan that was trimmed by a splice is
+      // only a prefix, not the goal: the replan owes us the rest
+      this.finish(this.awaitingReplan ? 'replanwait' : 'arrived')
     } else {
       // keep walking: only drop the transient controls. releasing
       // forward between cells was the per-block stutter; the next drive()

@@ -139,6 +139,13 @@ class Autopilot extends EventEmitter {
       this.emit('task')
     })
     this.executor.on('splice', () => this.scheduleReplan())
+    this.executor.on('replanwait', () => {
+      // the trimmed prefix ran out while the replan computes: hold and
+      // wait for the new plan. safety net — if no replan is actually in
+      // flight or queued (a splice swallowed by a pause window), ask for
+      // one now; replan() re-checks goal/task/pause on its own
+      if (!this.replanning && !this.replanPending) this.scheduleReplan()
+    })
     this.executor.on('noMaterial', () => this.onNoMaterial())
     this.executor.on('stuck', (info) => this.emit('stuck', info))
   }

@@ -7,6 +7,9 @@ const assert = require('node:assert')
 const { Vec3 } = require('vec3')
 
 const { executeCommand, hostileName } = require('../src/commandexec')
+const { search } = require('../src/engine/astar')
+const { generate, DEFAULTS } = require('../src/engine/moves')
+const { GoalXZ } = require('../src/engine/goals')
 const { createDefaultSettings } = require('../src/settings')
 const { Autopilot } = require('../src/autopilot')
 const { WaypointStore } = require('../src/waypoints')
@@ -441,5 +444,45 @@ test('movement: digging straight down reaches a lower floor safely', { timeout: 
   const p = bot.entity.position
   assert.ok(Math.abs(p.y - 58) < 1.3 && Math.abs(p.x - 0.5) < 1.2, `dug down to y=${p.y.toFixed(1)}`)
   assert.strictEqual(w.blockAtXYZ(0, 57, 0).name, 'stone', 'landed on the stone floor')
+  bot.disposePhysics()
+})
+
+test('movement: a wall mid-plan trims to the valid prefix, then replanwait', { timeout: 30000 }, async () => {
+  const { bot, pilot, world } = makeCtx(flatWorld)
+  // a straight 10-block plan along +x, computed against the untouched world
+  const plan = search({ x: 0, y: 64, z: 0 }, new GoalXZ(10, 0), (n) => generate(pilot.view, n, DEFAULTS))
+  assert.strictEqual(plan.status, 'found')
+  const wallAt = plan.moves.findIndex((m) => m.to.x === 6 && m.to.z === 0)
+  assert.ok(wallAt > 2, 'the straight plan crosses x=6')
+
+  let splicedAt = null
+  let lastProgress = -1
+  let walled = false
+  const seen = []
+  pilot.executor.on('splice', (e) => { splicedAt = e.at })
+  pilot.executor.on('progress', (p) => {
+    lastProgress = p.index
+    // drop the wall once the bot is a few moves in: inside the lookahead
+    // by the next validator pass, with valid ground still ahead of it
+    if (!walled && p.index >= 2) {
+      walled = true
+      world.setBlock(6, 64, 0, 'stone')
+    }
+  })
+  pilot.executor.on('replanwait', () => seen.push('replanwait'))
+  pilot.executor.on('arrived', () => seen.push('arrived'))
+
+  pilot.executor.run(plan.moves)
+  await waitIdlePilot(pilot, 20000)
+
+  assert.ok(walled, 'the wall dropped mid-run')
+  assert.ok(splicedAt !== null, 'the executor spliced')
+  assert.strictEqual(splicedAt, wallAt, 'the splice points at the walled move')
+  assert.ok(!pilot.executor.running, 'the walk finished the trimmed prefix')
+  assert.ok(pilot.executor.awaitingReplan, 'the goal is still owed a replan')
+  assert.ok(lastProgress >= wallAt - 1, `kept walking past the splice (reached move ${lastProgress})`)
+  const p = bot.entity.position
+  assert.ok(p.x > 3.5, `walked the valid prefix to x=${p.x.toFixed(1)}`)
+  assert.deepStrictEqual(seen, ['replanwait'], 'replanwait, never a premature arrived')
   bot.disposePhysics()
 })
