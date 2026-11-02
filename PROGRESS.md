@@ -1,6 +1,6 @@
 # progress — overnight sprint: non-blocking pathfinding
 
-> live sprint log · started 2026-11-03 00:30 utc+7 · **status: 95%** · milestones 0-6 done, bonus round in progress
+> live sprint log · started 2026-11-03 00:30 utc+7 · **status: 98%** · milestones 0-6 done, bonus round in progress
 
 ## the problem
 
@@ -79,3 +79,9 @@ via an `alive()` callback.
   these states real; before tonight they were invisible from the outside.
   one new dispatcher test drives the tag through all three moods. 177
   offline tests green.
+- 05:15 — profiled the brain suite: the full-auto progression was 163 s
+  and roughly a fifth of that was idle gap between activities, not work.
+  tick() is re-entrancy-guarded, so the driver loop now ticks every 50 ms
+  instead of 250 — same ladder, same inventory at the end, progression
+  down to 112-154 s across repeat runs and the whole suite from 183 s to
+  132 s. production code untouched; two clean 12/12 runs as proof.
