@@ -1,6 +1,6 @@
 # progress — overnight sprint: non-blocking pathfinding
 
-> live sprint log · started 2026-11-03 00:30 utc+7 · **status: 98%** · milestones 0-6 done, bonus round in progress
+> live sprint log · started 2026-11-03 00:30 utc+7 · **status: 100% — sprint complete** · milestones 0-6 + bonus round done
 
 ## the problem
 
@@ -85,3 +85,13 @@ via an `alive()` callback.
   instead of 250 — same ladder, same inventory at the end, progression
   down to 112-154 s across repeat runs and the whole suite from 183 s to
   132 s. production code untouched; two clean 12/12 runs as proof.
+- 06:15 — that cadence trim did not survive contact with ci: locally it
+  breezed through, on a loaded 2-core runner twenty snapshots a second
+  starved the fake physics and the ladder busted the 300 s budget.
+  reverted to 250 ms with the lesson written into the comment — the
+  profile stays as documentation, the suite stays honest. one flaky
+  live-e2e leg needed a rerun, then the full matrix (launcher, test
+  20/22/24, live 1.21.8/26.2/26.3, version-check) came back green on
+  39474d4. sprint complete: non-blocking pathfinding shipped in v0.4.0,
+  177 offline tests, status tags for the planner's moods, hardened live
+  suite, and one cadence lesson bought with two red runs.
