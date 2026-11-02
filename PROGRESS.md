@@ -68,3 +68,8 @@ via an `alive()` callback.
   the probe on the first loop pass, and `searchAsync`'s timeout result must
   be deep-equal to the sync oracle's — same status, expanded, partial flag.
   no more wall-clock racing in tests. 176 offline tests green.
+- 04:15 — the live suite stops trusting worldgen: the chest, furnace and
+  lever placements now retry on up to three patches of ground (a floating
+  cell has no anchor face to click — the exact 26.2 leg failure from the
+  release run), and the smelt wait widened to 180 s for slow-tick runners.
+  the full matrix came back green on the first try with the hardening in.
