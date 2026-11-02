@@ -265,6 +265,16 @@ class Autopilot extends EventEmitter {
     return r
   }
 
+  // what the planner is doing right now, for status lines and debugging:
+  // 'replanning' while a fresh plan computes, 'replanwait' while the
+  // executor has burned its trimmed prefix and is holding for that plan.
+  // null means the movement loop is fully settled — nothing to report.
+  planState () {
+    if (this.replanning) return 'replanning'
+    if (this.executor.awaitingReplan) return 'replanwait'
+    return null
+  }
+
   async launch (goal, taskLabel) {
     if (this.paused) this.resumeInternal()
     this.goal = goal

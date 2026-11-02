@@ -244,9 +244,12 @@ async function dispatchCommand (name, args, ctx, refs) {
     case 'status': {
       const n = node()
       const e = pilot.eta()
-      reply(`pos ${n.x} ${n.y} ${n.z} | health ${bot.health ?? '?'} food ${bot.food ?? '?'} | task ${pilot.task}${pilot.paused ? ' [PAUSED]' : ''}`)
+      // surface the async planner's mood: a bot that is mid-replan (or
+      // holding a trimmed queue open for one) is not stuck, it is thinking
+      const planning = typeof pilot.planState === 'function' ? pilot.planState() : null
+      reply(`pos ${n.x} ${n.y} ${n.z} | health ${bot.health ?? '?'} food ${bot.food ?? '?'} | task ${pilot.task}${pilot.paused ? ' [PAUSED]' : ''}${planning ? ` [${planning.toUpperCase()}]` : ''}`)
       reply(`goal ${pilot.goalLabel || 'none'}${e.ok && !e.arrived ? ` | ${e.blocks} blocks to go` : ''} | selection ${selection.hasSelection() ? selection.volume() + ' cells' : 'none'} | waypoints ${waypoints.list().length}`)
-      return { ok: true }
+      return { ok: true, planning: planning || undefined }
     }
 
     // -------------------------------------------------------- lifecycle

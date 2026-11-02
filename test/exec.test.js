@@ -79,6 +79,30 @@ test('exec: where and status report position', async () => {
   assert.ok(lines.some((l) => l.includes('pos 0 64 0')))
 })
 
+test('exec: status surfaces the planning state', async () => {
+  const { ctx, lines, pilot } = makeCtx(flatWorld)
+  const taskLine = () => lines[lines.length - 2] // pos/health/task line of the last status
+
+  await executeCommand('status', ctx)
+  assert.ok(!taskLine().includes('['), `a settled bot wears no tags: ${taskLine()}`)
+
+  pilot.replanning = true // a fresh plan is computing right now
+  let r = await executeCommand('status', ctx)
+  assert.ok(taskLine().includes('[REPLANNING]'), `mid-replan must be visible: ${taskLine()}`)
+  assert.strictEqual(r.planning, 'replanning')
+
+  pilot.replanning = false
+  pilot.executor.awaitingReplan = true // trimmed queue exhausted, holding for the plan
+  r = await executeCommand('status', ctx)
+  assert.ok(taskLine().includes('[REPLANWAIT]'), `replanwait must be visible: ${taskLine()}`)
+  assert.strictEqual(r.planning, 'replanwait')
+
+  pilot.executor.awaitingReplan = false
+  await executeCommand('status', ctx)
+  assert.ok(!taskLine().includes('['), `tags clear once the planner settles: ${taskLine()}`)
+  assert.strictEqual(r.planning, 'replanwait', 'the returned value reflects the moment of the call')
+})
+
 test('exec: goto with relative coordinates resolves against the feet', async () => {
   const { ctx, pilot } = makeCtx(flatWorld)
   await executeCommand('goto ~ ~ ~', ctx)
