@@ -1,6 +1,6 @@
 # progress — overnight sprint: non-blocking pathfinding
 
-> live sprint log · started 2026-11-03 00:30 utc+7 · **status: 90%** · milestones 0-6 done
+> live sprint log · started 2026-11-03 00:30 utc+7 · **status: 95%** · milestones 0-6 done, bonus round in progress
 
 ## the problem
 
@@ -73,3 +73,9 @@ via an `alive()` callback.
   cell has no anchor face to click — the exact 26.2 leg failure from the
   release run), and the smelt wait widened to 180 s for slow-tick runners.
   the full matrix came back green on the first try with the hardening in.
+- 04:45 — `#status` now tells you what the planner is doing: `task goto
+  [REPLANNING]` while a fresh plan computes, `[REPLANWAIT]` while the
+  executor holds a trimmed queue open for it. the async migration made
+  these states real; before tonight they were invisible from the outside.
+  one new dispatcher test drives the tag through all three moods. 177
+  offline tests green.
