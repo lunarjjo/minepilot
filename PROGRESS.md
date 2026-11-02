@@ -27,7 +27,7 @@ via an `alive()` callback.
 | 4 | command layer awaits + `come` reply fix | done |
 | 5 | full suite green | done |
 | 6 | v0.4.0 release — changelog, readme section, tag | done |
-| 7 | docs & wrap | pending |
+| 7 | docs & wrap — memory session note, /lunar/ live stats bonus | in progress |
 
 ## log
 
@@ -60,3 +60,7 @@ via an `alive()` callback.
   set of live tests on identical source, and the rerun of the exact same
   commit came back green across the whole matrix, so the release stands
   on a verified pipeline.
+- 03:35 — bonus round opened (the night is young, the standing rule is
+  small and precise). first pass: four unit tests pinning `trimPlan`'s
+  head-trim contract — the async-planning trim that was only exercised
+  indirectly until now. 175 offline tests green.
