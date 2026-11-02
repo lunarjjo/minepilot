@@ -1,6 +1,6 @@
 # progress — overnight sprint: non-blocking pathfinding
 
-> live sprint log · started 2026-11-03 00:30 utc+7 · **status: 75%** · milestones 0, 1, 2, 3, 4 done
+> live sprint log · started 2026-11-03 00:30 utc+7 · **status: 80%** · milestones 0-5 done
 
 ## the problem
 
@@ -25,7 +25,7 @@ via an `alive()` callback.
 | 2 | autopilot async migration (planNow, replan serialization, trim-to-current) | done |
 | 3 | executor splice-trim + `replanwait` semantics | done |
 | 4 | command layer awaits + `come` reply fix | done |
-| 5 | full suite green | pending |
+| 5 | full suite green | done |
 | 6 | v0.4.0 release — changelog, readme section, tag | pending |
 | 7 | docs & wrap | pending |
 
@@ -49,3 +49,6 @@ via an `alive()` callback.
   new executor test walks a 10-block plan, drops a wall three moves ahead
   and asserts splice-at-5, continued progress, then replanwait. exec 26,
   engine 44, command/manager 37 — all green.
+- 02:20 — milestone 5 done: the full suite is green in one run — 171 tests,
+  0 failures, 4 min 02 s wall clock, no skips. the async planner, the
+  splicing executor and every process on top of them agree with each other.
