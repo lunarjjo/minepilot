@@ -1,6 +1,6 @@
 # progress — overnight sprint: non-blocking pathfinding
 
-> live sprint log · started 2026-11-03 00:30 utc+7 · **status: 5%** · milestone 0 done
+> live sprint log · started 2026-11-03 00:30 utc+7 · **status: 25%** · milestone 1 done
 
 ## the problem
 
@@ -21,8 +21,8 @@ via an `alive()` callback.
 | # | milestone | status |
 |---|-----------|--------|
 | 0 | sprint setup — this log, baseline pinned at v0.3.0 (b02c299) | done |
-| 1 | time-sliced A* core + parity / liveness / abort tests | in progress |
-| 2 | autopilot async migration (planNow, replan serialization, trim-to-current) | pending |
+| 1 | time-sliced A* core + parity / liveness / abort tests | done |
+| 2 | autopilot async migration (planNow, replan serialization, trim-to-current) | in progress |
 | 3 | executor splice-trim + `replanwait` semantics | pending |
 | 4 | command layer awaits + `come` reply fix | pending |
 | 5 | full suite green | pending |
@@ -33,3 +33,6 @@ via an `alive()` callback.
 
 - 00:30 — sprint open. baseline: v0.3.0, ci run 14 green, 15 test files.
   reading the engine before touching it.
+- 00:58 — milestone 1 done. `searchAsync()` over a shared `stepSearch` core,
+  parity with the sync oracle pinned by tests; 6 new tests + 83 engine
+  regression tests green, zero regressions.
