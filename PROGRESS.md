@@ -1,6 +1,6 @@
 # progress — overnight sprint: non-blocking pathfinding
 
-> live sprint log · started 2026-11-03 00:30 utc+7 · **status: 70%** · milestones 0, 1, 2, 4 done
+> live sprint log · started 2026-11-03 00:30 utc+7 · **status: 75%** · milestones 0, 1, 2, 3, 4 done
 
 ## the problem
 
@@ -23,7 +23,7 @@ via an `alive()` callback.
 | 0 | sprint setup — this log, baseline pinned at v0.3.0 (b02c299) | done |
 | 1 | time-sliced A* core + parity / liveness / abort tests | done |
 | 2 | autopilot async migration (planNow, replan serialization, trim-to-current) | done |
-| 3 | executor splice-trim + `replanwait` semantics | in progress |
+| 3 | executor splice-trim + `replanwait` semantics | done |
 | 4 | command layer awaits + `come` reply fix | done |
 | 5 | full suite green | pending |
 | 6 | v0.4.0 release — changelog, readme section, tag | pending |
@@ -41,3 +41,11 @@ via an `alive()` callback.
   async follow refresh), 22 process/manager call sites awaited, the #come
   reply bug fixed with a regression test. 110 command/manager tests + the
   12-test brain suite (215 s) green.
+- 02:12 — milestone 3 done. a move that stops being true no longer freezes
+  the walk: the executor trims the queue to the still-valid prefix and keeps
+  walking while the replan computes, and reports `replanwait` when the
+  prefix runs dry — never a premature `arrived`. the autopilot treats
+  replanwait as a safety net (asks for a replan if none is in flight).
+  new executor test walks a 10-block plan, drops a wall three moves ahead
+  and asserts splice-at-5, continued progress, then replanwait. exec 26,
+  engine 44, command/manager 37 — all green.
