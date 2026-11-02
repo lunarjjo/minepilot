@@ -286,6 +286,56 @@ function makePilot (world, items) {
   return { bot, pilot, settings }
 }
 
+// --------------------------------------------------- trimPlan (async heads)
+
+const tcell = (x) => ({ x, y: 64, z: 0 })
+const tmove = (a, b) => ({ type: 'traverse', from: tcell(a), to: tcell(b), toBreak: [], cost: 1 })
+
+test('autopilot: trimPlan keeps a plan the bot has not caught up with', () => {
+  const w = new VoxelWorld()
+  const { pilot } = makePilot(w)
+  // bot at (0,64,0); no move destination matches its own cell
+  const r = { moves: [tmove(0, 1), tmove(1, 2)], nodes: [tcell(0), tcell(1), tcell(2)] }
+  const out = pilot.trimPlan(r)
+  assert.strictEqual(out.moves.length, 2)
+  assert.strictEqual(out.nodes.length, 3)
+})
+
+test('autopilot: trimPlan drops exactly the moves behind the bot', () => {
+  const w = new VoxelWorld()
+  const { bot, pilot } = makePilot(w)
+  // the bot drifted onto (2,64,0) while the plan was computed — the
+  // destination of the second move
+  bot.entity.position = new Vec3(2.3, 64, 0)
+  const r = { moves: [tmove(0, 1), tmove(1, 2), tmove(2, 3), tmove(3, 4)], nodes: [tcell(0), tcell(1), tcell(2), tcell(3), tcell(4)] }
+  const out = pilot.trimPlan(r)
+  // the LAST matching cell wins, and moves/nodes stay aligned
+  assert.strictEqual(out.moves.length, 2)
+  assert.strictEqual(out.moves[0].to.x, 3)
+  assert.strictEqual(out.nodes.length, 3)
+  assert.strictEqual(out.nodes[0].x, 2)
+})
+
+test('autopilot: trimPlan on the final cell empties the plan but keeps the node', () => {
+  const w = new VoxelWorld()
+  const { bot, pilot } = makePilot(w)
+  bot.entity.position = new Vec3(1.5, 64, 0)
+  const r = { moves: [tmove(0, 1)], nodes: [tcell(0), tcell(1)] }
+  const out = pilot.trimPlan(r)
+  assert.strictEqual(out.moves.length, 0)
+  assert.deepStrictEqual(out.nodes, [{ x: 1, y: 64, z: 0 }])
+})
+
+test('autopilot: trimPlan survives empty plans and missing moves', () => {
+  const w = new VoxelWorld()
+  const { pilot } = makePilot(w)
+  const empty = { moves: [], nodes: [] }
+  const out = pilot.trimPlan(empty)
+  assert.strictEqual(out.moves.length, 0)
+  const bogus = { moves: null, nodes: null }
+  assert.strictEqual(pilot.trimPlan(bogus), bogus, 'returned untouched')
+})
+
 test('mine process: digs the vein including adjacent ores', async () => {
   const w = new VoxelWorld()
   w.ground(-6, -6, 6, 6, 63)
