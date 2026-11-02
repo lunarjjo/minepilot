@@ -1,6 +1,6 @@
 # progress — overnight sprint: non-blocking pathfinding
 
-> live sprint log · started 2026-11-03 00:30 utc+7 · **status: 25%** · milestone 1 done
+> live sprint log · started 2026-11-03 00:30 utc+7 · **status: 70%** · milestones 0, 1, 2, 4 done
 
 ## the problem
 
@@ -22,9 +22,9 @@ via an `alive()` callback.
 |---|-----------|--------|
 | 0 | sprint setup — this log, baseline pinned at v0.3.0 (b02c299) | done |
 | 1 | time-sliced A* core + parity / liveness / abort tests | done |
-| 2 | autopilot async migration (planNow, replan serialization, trim-to-current) | in progress |
-| 3 | executor splice-trim + `replanwait` semantics | pending |
-| 4 | command layer awaits + `come` reply fix | pending |
+| 2 | autopilot async migration (planNow, replan serialization, trim-to-current) | done |
+| 3 | executor splice-trim + `replanwait` semantics | in progress |
+| 4 | command layer awaits + `come` reply fix | done |
 | 5 | full suite green | pending |
 | 6 | v0.4.0 release — changelog, readme section, tag | pending |
 | 7 | docs & wrap | pending |
@@ -36,3 +36,8 @@ via an `alive()` callback.
 - 00:58 — milestone 1 done. `searchAsync()` over a shared `stepSearch` core,
   parity with the sync oracle pinned by tests; 6 new tests + 83 engine
   regression tests green, zero regressions.
+- 01:55 — milestones 2 + 4 done as one atomic change: planNow on the async
+  engine (planSeq abort token, serialized replans, trim-to-current heads,
+  async follow refresh), 22 process/manager call sites awaited, the #come
+  reply bug fixed with a regression test. 110 command/manager tests + the
+  12-test brain suite (215 s) green.
