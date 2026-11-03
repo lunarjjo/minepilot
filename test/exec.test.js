@@ -416,12 +416,17 @@ test('movement: digging through a wall equips the best tool', { timeout: 90000 }
   const p = bot.entity.position
   assert.ok(Math.abs(p.x - 7.5) < 1.2 && Math.abs(p.y - 64) < 1.3, `tunneled through at x=${p.x.toFixed(1)}`)
   assert.ok(bot.equips.includes('iron_pickaxe'), 'the dig swung the pickaxe, not bare hands')
-  // the tunnel opened the wall at whatever z the planner chose (diagonal
-  // routes through the 2-deep wall are legal) — assert at the bot's own z
-  const z = Math.round(p.z)
-  assert.ok(['air', 'cave_air'].includes(w.blockAtXYZ(3, 64, z).name) ||
-    ['air', 'cave_air'].includes(w.blockAtXYZ(4, 64, z).name),
-    'the wall is opened along the tunnel')
+  // the tunnel opened the wall at whatever z the planner chose — a diagonal
+  // route through the 2-deep wall is legal, and a splice under load can
+  // legitimately re-route the dig to a fresh row mid-wall, after which the
+  // bot drifts back to the goal's z. the wall is 6 tall under a sealed
+  // ceiling and the floor only spans z -2..2, so reaching x=7 at ground
+  // level is only possible THROUGH the wall: opened-somewhere + arrival
+  // is the honest proof of the tunnel.
+  const opened = [-2, -1, 0, 1, 2].some((z) =>
+    ['air', 'cave_air'].includes(w.blockAtXYZ(3, 64, z).name) ||
+    ['air', 'cave_air'].includes(w.blockAtXYZ(4, 64, z).name))
+  assert.ok(opened, 'the wall is opened along the tunnel')
   bot.disposePhysics()
 })
 
