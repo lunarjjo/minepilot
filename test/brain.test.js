@@ -325,3 +325,102 @@ test('brain: the movement watchdog restarts a wedged activity', { timeout: 30000
   assert.equal(brain.status().on, true)
   brain.dispose()
 })
+
+// ----------------------------------------------------- furnace cook pipeline
+// the ci regression: a cook that could not place its furnace spun the
+// stuck-detector into a 90s taboo while an orphaned builder raced it, and
+// a hung furnace window later wedged the whole brain in silence. these
+// tests pin the cured pipeline: place-for-real (verified against the
+// world, retried on a new spot), load, smelt, take — and fail honestly
+// when the server stops answering.
+
+function cookStack (opts = {}) {
+  const stack = makeStack()
+  // the survival ladder's table: the furnace recipe is a 3x3 and the
+  // crafter walks to the table to make one
+  stack.w.setBlock(1, 62, 1, 'crafting_table')
+  if (!opts.noFurnace) stack.w.setBlock(2, 62, -1, 'furnace')
+  return stack
+}
+
+test('brain: cook crafts, places on retry, and finishes the smelt', { timeout: 90000 }, async () => {
+  const { bot, brain, w, logs } = cookStack({ noFurnace: true })
+  bot.setInventory([mkItem('cobblestone', 8), mkItem('coal', 2), mkItem('beef', 3)])
+  const has = (name) => (bot.inventory.items().find((i) => i.name === name) || {}).count || 0
+
+  // the first placement target is dead ground: every anchor aiming at it
+  // is refused by the server (the ci failure's signature). the brain must
+  // notice the block never landed and take the next spot in the ring.
+  const realPlace = bot.placeBlock.bind(bot)
+  const poisoned = new Set()
+  bot.placeBlock = async (ref, face) => {
+    const key = `${ref.position.x + face.x},${ref.position.y + face.y},${ref.position.z + face.z}`
+    if (poisoned.size === 0) poisoned.add(key)
+    if (poisoned.has(key)) throw new Error('Server refused to place furnace: dead ground')
+    return realPlace(ref, face)
+  }
+
+  brain.setEnabled(true)
+  const t0 = Date.now()
+  while (Date.now() - t0 < 80000) {
+    await brain.tick()
+    await sleep(50)
+    const fw = bot.furnaceWindows && bot.furnaceWindows.find((x) => !x.closed)
+    if (fw) fw.smeltTick('cooked_beef')
+    if (has('cooked_beef') > 0) break
+  }
+  brain.dispose()
+
+  assert.ok(has('cooked_beef') > 0, `dinner was served (inv: ${JSON.stringify(bot.inventory.items().map((i) => i.name + 'x' + i.count))})`)
+  const furnaces = [...w.blocks.values()].filter((b) => b.name === 'furnace')
+  assert.strictEqual(furnaces.length, 1, 'exactly one furnace landed in the world')
+  const spot = furnaces[0].position
+  assert.ok(!poisoned.has(`${spot.x},${spot.y},${spot.z}`), 'the furnace landed on fresh ground, not the dead cell')
+  assert.ok(logs.some((l) => /did not land/.test(l)), `the refusal was seen and said out loud: ${logs.slice(-4).join(' | ')}`)
+  assert.ok(logs.some((l) => /placed the furnace/.test(l)), 'the retry reported its landing')
+  assert.strictEqual(has('beef'), 0, 'the raw beef went into the furnace')
+})
+
+test('brain: a hung furnace window fails honestly, not silently', { timeout: 30000 }, async () => {
+  const { bot, brain, logs } = cookStack()
+  bot.setInventory([mkItem('beef', 2), mkItem('coal', 1)])
+  // the server accepts the open but never answers — the exact ci wedge
+  bot.openFurnace = () => new Promise(() => {})
+  brain.setEnabled(true)
+  const t0 = Date.now()
+  while (Date.now() - t0 < 16000) {
+    await brain.tick()
+    await sleep(100)
+    if (logs.some((l) => /timed out/.test(l))) break
+  }
+  brain.dispose()
+  assert.ok(logs.some((l) => /timed out/.test(l)),
+    `the hung window was called out instead of wedging the brain: ${logs.slice(-3).join(' | ')}`)
+})
+
+test('brain: an in-progress smelt is waited on, never double-loaded', { timeout: 60000 }, async () => {
+  const { bot, brain, logs } = cookStack()
+  bot.setInventory([mkItem('beef', 3), mkItem('coal', 2)])
+  const has = (name) => (bot.inventory.items().find((i) => i.name === name) || {}).count || 0
+  // a leftover smelt from an earlier attempt: 4 beef already inside
+  const realOpen = bot.openFurnace.bind(bot)
+  bot.openFurnace = async (block) => {
+    const win = await realOpen(block)
+    const beef = (bot.registry.itemsByName.beef || {}).id
+    win.storage.push({ name: 'beef', count: 4, type: beef, role: 'input' })
+    return win
+  }
+  brain.setEnabled(true)
+  const t0 = Date.now()
+  while (Date.now() - t0 < 50000) {
+    await brain.tick()
+    await sleep(50)
+    const fw = bot.furnaceWindows && bot.furnaceWindows.find((x) => !x.closed)
+    if (fw) fw.smeltTick('cooked_beef')
+    if (has('cooked_beef') > 0) break
+  }
+  brain.dispose()
+  assert.ok(has('cooked_beef') > 0, `the leftover smelt was finished (inv: ${JSON.stringify(bot.inventory.items().map((i) => i.name + 'x' + i.count))})`)
+  assert.strictEqual(has('beef'), 3, 'the carried beef was NOT stacked onto the loaded furnace')
+  assert.ok(logs.some((l) => /smelted/.test(l)), `the take was reported: ${logs.slice(-3).join(' | ')}`)
+})

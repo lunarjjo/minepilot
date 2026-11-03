@@ -353,16 +353,21 @@ function createBrain (ctx, hooks) {
     return pilot.build(bp, { x: 0, y: 0, z: 0 })
   }
 
-  function findSpotNear (pilot) {
+  // the ring of candidate cells beside the bot, tried in order. the runPlace
+  // comment below owns the full story.
+  const SPOT_RING = [[2, 0], [-2, 0], [0, 2], [0, -2], [2, 1], [-2, -1], [1, 2], [-1, -2]]
+
+  function findSpotNear (pilot, tried) {
     const p = pilot.pos()
     if (!p) return null
     const x0 = Math.floor(p.x)
     const y = Math.floor(p.y)
     const z0 = Math.floor(p.z)
     // a small ring of cells beside the bot, on solid ground, not our body
-    for (const [dx, dz] of [[2, 0], [-2, 0], [0, 2], [0, -2], [2, 1], [-2, -1], [1, 2], [-1, -2]]) {
+    for (const [dx, dz] of SPOT_RING) {
       const x = x0 + dx
       const z = z0 + dz
+      if (tried && tried.has(x + ',' + y + ',' + z)) continue
       try {
         if (pilot.view.name(x, y, z) !== 'air') continue
         if (!pilot.view.solid(x, y - 1, z)) continue
@@ -372,13 +377,28 @@ function createBrain (ctx, hooks) {
     return null
   }
 
-  async function runPlace (pilot, snap, blockName) {
-    const spot = findSpotNear(pilot)
-    if (!spot) { log(`auto: no spot beside the bot for the ${blockName}`); return false }
-    placeCell(pilot, blockName, spot.x, spot.y, spot.z)
-    const ok = await waitIdle(pilot, 60000, () => !busy || busy.kind !== 'place')
-    if (ok) log(`auto: placed the ${blockName} at ${spot.x} ${spot.y} ${spot.z}`)
-    return ok
+  async function runPlace (pilot, snap, blockName, isCancelled) {
+    const tried = new Set()
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const spot = findSpotNear(pilot, tried)
+      if (!spot) { log(`auto: no spot beside the bot for the ${blockName}`); return false }
+      tried.add(spot.x + ',' + spot.y + ',' + spot.z)
+      placeCell(pilot, blockName, spot.x, spot.y, spot.z)
+      // wait for the builder job to land it — polling the task, with the
+      // CALLER's cancellation (the old predicate hardcoded
+      // busy.kind !== 'place', which cancelled instantly whenever the
+      // cook activity placed its own furnace through ensureFurnace:
+      // "no furnace" was declared while the placement was mid-flight)
+      const ok = await waitIdle(pilot, 60000, isCancelled || (() => false))
+      let landed = false
+      try { landed = pilot.view.name(spot.x, spot.y, spot.z) === blockName } catch (e) { landed = false }
+      if (landed) {
+        log(`auto: placed the ${blockName} at ${spot.x} ${spot.y} ${spot.z}`)
+        return true
+      }
+      log(`auto: the ${blockName} did not land at ${spot.x} ${spot.y} ${spot.z}${ok ? '' : ' (build interrupted)'} — ${attempt < 2 ? 'trying another spot' : 'giving up on placing it'}`)
+    }
+    return false
   }
 
   async function runCraft (ctx2, item, count, anyPlanks) {
@@ -416,13 +436,29 @@ function createBrain (ctx, hooks) {
         return false
       }
     }
-    const placed = await runPlace(pilot, null, 'furnace')
+    const placed = await runPlace(pilot, null, 'furnace', () => !busy || busy.kind !== 'cook')
     if (!placed) return false
     return blockInRange(bot, ['furnace', 'blast_furnace'], 32)
   }
 
   // open a furnace, load it, wait for the output, take it (the station
-  // lessons apply: containerItems vs items, transfer for the take)
+  // lessons apply: containerItems vs items, transfer for the take).
+  // every window operation is guarded: a live server can leave a furnace
+  // window promise dangling (seen in ci: the whole brain went silent for
+  // minutes holding an unresolved putInput) — a hung window must fail
+  // honestly so the tick loop can taboo and retry, not wedge the brain.
+  const FURNACE_OP_MS = 10000
+
+  function windowOp (p, what) {
+    let timer = null
+    return Promise.race([
+      Promise.resolve(p).catch((e) => { throw new Error(`${what}: ${String(e.message || e).slice(0, 90)}`) }),
+      new Promise((resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${what} timed out after ${FURNACE_OP_MS / 1000}s (hung furnace window)`)), FURNACE_OP_MS)
+      })
+    ]).finally(() => clearTimeout(timer))
+  }
+
   async function runFurnace (bot, pilot, inputName, fuelName) {
     const { items } = require('./inventory')
     const reg = bot.registry
@@ -446,31 +482,47 @@ function createBrain (ctx, hooks) {
     }
     const block = pilot.botBlockAt(target)
     if (!block) return { ok: false, error: 'the furnace is gone' }
-    const furnace = await bot.openFurnace(block)
+    const furnace = await windowOp(bot.openFurnace(block), 'opening the furnace')
     try {
-      const inStack = items(bot).find((it) => it.name === inputName)
-      if (!inStack) return { ok: false, error: `no ${inputName} to smelt` }
-      const invItems = items(bot)
-      const countOfName = (n) => invItems.filter((it) => it.name === n).reduce((a, it) => a + (it.count || 1), 0)
+      // a smelt still running from an earlier attempt is waited on, never
+      // double-loaded — stacking a second raw batch on top is how a whole
+      // inventory of food disappears into one furnace forever
+      const already = furnace.inputItem()
+      let expected = 0
+      if (already && already.count > 0) {
+        if (already.name !== inputName) return { ok: false, error: `the furnace is busy smelting ${already.name}` }
+        expected = already.count
+      } else {
+        const inStack = items(bot).find((it) => it.name === inputName)
+        if (!inStack) return { ok: false, error: `no ${inputName} to smelt` }
+        await windowOp(furnace.putInput(inStack.type, null, inStack.count), 'loading the input')
+        expected = Math.max(1, inStack.count)
+      }
       // fuel policy: coal/charcoal first; planks/logs only on a surplus —
-      // never burn the wood the tool ladder still needs
-      let fuel = invItems.find((it) => it.name === 'coal') || invItems.find((it) => it.name === 'charcoal')
-      if (!fuel && countOfName('oak_planks') >= 8) fuel = invItems.find((it) => it.name === 'oak_planks')
-      if (!fuel && countOfName('oak_log') >= 6) fuel = invItems.find((it) => it.name === 'oak_log')
-      if (!fuel) return { ok: false, error: 'no fuel (coal or charcoal, or a wood surplus)' }
-      await furnace.putInput(inStack.type, null, inStack.count)
-      await furnace.putFuel(fuel.type, null, Math.max(1, Math.min(fuel.count, 4)))
+      // never burn the wood the tool ladder still needs. a furnace that
+      // already holds live fuel skips the reload entirely.
+      if (!furnace.fuelItem() || !already) {
+        const invItems = items(bot)
+        const countOfName = (n) => invItems.filter((it) => it.name === n).reduce((a, it) => a + (it.count || 1), 0)
+        let fuel = invItems.find((it) => it.name === 'coal') || invItems.find((it) => it.name === 'charcoal')
+        if (!fuel && countOfName('oak_planks') >= 8) fuel = invItems.find((it) => it.name === 'oak_planks')
+        if (!fuel && countOfName('oak_log') >= 6) fuel = invItems.find((it) => it.name === 'oak_log')
+        if (fuel) {
+          await windowOp(furnace.putFuel(fuel.type, null, Math.max(1, Math.min(fuel.count, 4))), 'loading the fuel')
+        } else if (!furnace.fuelItem()) {
+          return { ok: false, error: 'no fuel (coal or charcoal, or a wood surplus)' }
+        }
+      }
       // wait for the WHOLE stack (10s per item vanilla): returning on the
       // first output strands the rest inside the furnace — the brain would
       // never come back for it once the inventory reads zero raw food
-      const expected = Math.max(1, inStack.count)
       const deadline = Date.now() + 60000 + expected * 12000
       while (Date.now() < deadline) {
         const out = furnace.outputItem()
         const inp = furnace.inputItem()
         if (out && (out.count >= expected || out.count >= 64 || !inp)) {
           if (typeof bot.transfer === 'function') {
-            await bot.transfer({
+            await windowOp(bot.transfer({
               window: furnace,
               itemType: out.type,
               metadata: null,
@@ -479,9 +531,9 @@ function createBrain (ctx, hooks) {
               sourceEnd: 3,
               destStart: furnace.inventoryStart,
               destEnd: furnace.inventoryEnd
-            })
+            }), 'taking the output')
           } else {
-            await furnace.takeOutput()
+            await windowOp(furnace.takeOutput(), 'taking the output')
           }
           return { ok: true, output: out.name, count: out.count }
         }
@@ -583,7 +635,7 @@ function createBrain (ctx, hooks) {
       return
     }
     if (activity.kind === 'place') {
-      await runPlace(pilot, null, activity.block)
+      await runPlace(pilot, null, activity.block, () => !busy || busy.kind !== 'place')
       return
     }
     if (activity.kind === 'cook' || activity.kind === 'smelt') {
