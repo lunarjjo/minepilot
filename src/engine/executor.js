@@ -666,21 +666,24 @@ class Executor extends EventEmitter {
         // the rise window also matters: the server refuses placements
         // inside the player bbox, so click only after rising >= 1.0 of
         // the 1.25 jump apex.
-        const p0 = this.pos()
         this.control('jump', true)
         let placed = false
         try {
-          // rise past 1.08 of the 1.25 apex: at exactly 1.0 the server's
-          // (slightly behind) view of the bot still overlaps the target
-          // cell and refuses the placement — the racy-pillar stumble
+          // the rise is measured against the PLAN's ground level, never
+          // the live y at entry: a failed attempt usually leaves the bot
+          // mid-bounce, and a mid-air baseline puts +1.08 out of reach —
+          // every attempt then times out silently, the place tries mount
+          // up as "cannot place", and the bot eventually wanders off the
+          // route entirely (found on the broken-staircase terrain test)
+          const groundY = m.from.y
           const rose = await this.waitUntil(() => {
             const p = this.pos()
-            return p && p0 && p.y - p0.y >= 1.08
+            return p && p.y - groundY >= 1.08
           }, 900)
           if (rose) {
             const p = this.pos()
             const fx = Math.floor(p.x)
-            const fy = Math.floor(p0.y)
+            const fy = groundY
             const fz = Math.floor(p.z)
             const below = this.blockAt({ x: fx, y: fy - 1, z: fz })
             if (below) {

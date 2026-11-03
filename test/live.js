@@ -291,7 +291,7 @@ async function main () {
       return r.body.task.task === 'idle' ? 'done' : null
     }, 120000, 'the walk to fresh ground').catch(() => null)
     const pos1 = (await get('/api/status')).body.position
-    await give('chest', 1)
+    await give('chest', 2) // a spare: one item can vanish into a refused placement on rough ground
     await until(async () => (await invCount('chest')) >= 1, 20000, 'the chest item').catch(() => null)
     // up to three patches of ground: the first pick may have no anchor face
     let fillChestOk = false
@@ -300,7 +300,9 @@ async function main () {
       if (attempt > 0) await shiftSpot()
       fillChestOk = await fillCell(2, 'chest')
       ws.send(JSON.stringify({ t: 'station:open', kind: 'chest' }))
-      chestFrame = await until(() => msgs.find((m) => m.t === 'station' && m.open && m.kind === 'chest'), 15000, 'the chest station frame')
+      // rough worldgen makes the station walk itself take a stuck-retry
+      // (~20s) — a 15s window failed a green run for exactly that
+      chestFrame = await until(() => msgs.find((m) => m.t === 'station' && m.open && m.kind === 'chest'), 35000, 'the chest station frame')
         .catch(() => null)
     }
     check('sel fill places the chest', fillChestOk, 'command refused')

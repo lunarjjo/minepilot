@@ -213,7 +213,7 @@ ships a version natively, the vendored copy is skipped entirely.
 ## testing
 
 ```bash
-npm test          # 180 offline tests: engine, grammar, processes, cockpit, brain
+npm test          # 187 offline tests: engine, grammar, processes, cockpit, brain
 npm run test:live # live e2e against a running vanilla server
 ```
 

@@ -148,8 +148,20 @@ async function sleepInBed (ctx) {
   if (!block) return { ok: false, error: 'the bed is gone' }
   try {
     if (!bot.sleep) return { ok: false, error: 'this mineflayer build cannot sleep' }
+    // the goal state is "asleep in a bed at night" — arriving at the
+    // command already asleep (a race with a packet-side sleep confirm on
+    // strict servers) is success, not an error. same tolerance wake has
+    // for "not sleeping".
+    if (bot.isSleeping) {
+      reply('already sleeping (#wake to get up)')
+      return { ok: true }
+    }
     await bot.sleep(block)
   } catch (e) {
+    if (bot.isSleeping) {
+      reply(`sleeping in the bed at ${target.x} ${target.y} ${target.z} (#wake to get up)`)
+      return { ok: true }
+    }
     return { ok: false, error: `cannot sleep: ${String(e.message || e).slice(0, 80)}` }
   }
   reply(`sleeping in the bed at ${target.x} ${target.y} ${target.z} (#wake to get up)`)
